@@ -94,6 +94,10 @@ zeroclaw integrations info Telegram
 # Manage background service
 zeroclaw service install
 zeroclaw service status
+
+# Migrate memory from OpenClaw (safe preview first)
+zeroclaw migrate openclaw --dry-run
+zeroclaw migrate openclaw
 ```
 
 > **Dev fallback (no global install):** prefix commands with `cargo run --release --` (example: `cargo run --release -- status`).
@@ -109,12 +113,13 @@ Every subsystem is a **trait** — swap implementations with a config change, ze
 | Subsystem | Trait | Ships with | Extend |
 |-----------|-------|------------|--------|
 | **AI Models** | `Provider` | 22+ providers (OpenRouter, Anthropic, OpenAI, Ollama, Venice, Groq, Mistral, xAI, DeepSeek, Together, Fireworks, Perplexity, Cohere, Bedrock, etc.) | `custom:https://your-api.com` — any OpenAI-compatible API |
-| **Channels** | `Channel` | CLI, Telegram, Discord, Slack, iMessage, Matrix, Webhook | Any messaging API |
+| **Channels** | `Channel` | CLI, Telegram, Discord, Slack, iMessage, Matrix, WhatsApp, Webhook | Any messaging API |
 | **Memory** | `Memory` | SQLite with hybrid search (FTS5 + vector cosine similarity), Markdown | Any persistence backend |
 | **Tools** | `Tool` | shell, file_read, file_write, memory_store, memory_recall, memory_forget, browser_open (Brave + allowlist), composio (optional) | Any capability |
 | **Observability** | `Observer` | Noop, Log, Multi | Prometheus, OTel |
 | **Runtime** | `RuntimeAdapter` | Native (Mac/Linux/Pi) | Docker, WASM (planned; unsupported kinds fail fast) |
 | **Security** | `SecurityPolicy` | Gateway pairing, sandbox, allowlists, rate limits, filesystem scoping, encrypted secrets | — |
+| **Identity** | `IdentityConfig` | OpenClaw (markdown), AIEOS v1.1 (JSON) | Any identity format |
 | **Tunnel** | `Tunnel` | None, Cloudflare, Tailscale, ngrok, Custom | Any tunnel binary |
 | **Heartbeat** | Engine | HEARTBEAT.md periodic tasks | — |
 | **Skills** | Loader | TOML manifests + SKILL.md instructions | Community skill packs |
@@ -197,6 +202,43 @@ rerun channel setup only:
 zeroclaw onboard --channels-only
 ```
 
+### WhatsApp Business Cloud API Setup
+
+WhatsApp uses Meta's Cloud API with webhooks (push-based, not polling):
+
+1. **Create a Meta Business App:**
+   - Go to [developers.facebook.com](https://developers.facebook.com)
+   - Create a new app → Select "Business" type
+   - Add the "WhatsApp" product
+
+2. **Get your credentials:**
+   - **Access Token:** From WhatsApp → API Setup → Generate token (or create a System User for permanent tokens)
+   - **Phone Number ID:** From WhatsApp → API Setup → Phone number ID
+   - **Verify Token:** You define this (any random string) — Meta will send it back during webhook verification
+
+3. **Configure ZeroClaw:**
+   ```toml
+   [channels_config.whatsapp]
+   access_token = "EAABx..."
+   phone_number_id = "123456789012345"
+   verify_token = "my-secret-verify-token"
+   allowed_numbers = ["+1234567890"]  # E.164 format, or ["*"] for all
+   ```
+
+4. **Start the gateway with a tunnel:**
+   ```bash
+   zeroclaw gateway --port 8080
+   ```
+   WhatsApp requires HTTPS, so use a tunnel (ngrok, Cloudflare, Tailscale Funnel).
+
+5. **Configure Meta webhook:**
+   - In Meta Developer Console → WhatsApp → Configuration → Webhook
+   - **Callback URL:** `https://your-tunnel-url/whatsapp`
+   - **Verify Token:** Same as your `verify_token` in config
+   - Subscribe to `messages` field
+
+6. **Test:** Send a message to your WhatsApp Business number — ZeroClaw will respond via the LLM.
+
 ## Configuration
 
 Config: `~/.zeroclaw/config.toml` (created by `onboard`)
@@ -243,7 +285,80 @@ allowed_domains = ["docs.rs"]  # required when browser is enabled
 
 [composio]
 enabled = false                 # opt-in: 1000+ OAuth apps via composio.dev
+
+[identity]
+format = "openclaw"             # "openclaw" (default, markdown files) or "aieos" (JSON)
+# aieos_path = "identity.json"  # path to AIEOS JSON file (relative to workspace or absolute)
+# aieos_inline = '{"identity":{"names":{"first":"Nova"}}}'  # inline AIEOS JSON
 ```
+
+## Identity System (AIEOS Support)
+
+ZeroClaw supports **identity-agnostic** AI personas through two formats:
+
+### OpenClaw (Default)
+
+Traditional markdown files in your workspace:
+- `IDENTITY.md` — Who the agent is
+- `SOUL.md` — Core personality and values
+- `USER.md` — Who the agent is helping
+- `AGENTS.md` — Behavior guidelines
+
+### AIEOS (AI Entity Object Specification)
+
+[AIEOS](https://aieos.org) is a standardization framework for portable AI identity. ZeroClaw supports AIEOS v1.1 JSON payloads, allowing you to:
+
+- **Import identities** from the AIEOS ecosystem
+- **Export identities** to other AIEOS-compatible systems
+- **Maintain behavioral integrity** across different AI models
+
+#### Enable AIEOS
+
+```toml
+[identity]
+format = "aieos"
+aieos_path = "identity.json"  # relative to workspace or absolute path
+```
+
+Or inline JSON:
+
+```toml
+[identity]
+format = "aieos"
+aieos_inline = '''
+{
+  "identity": {
+    "names": { "first": "Nova", "nickname": "N" }
+  },
+  "psychology": {
+    "neural_matrix": { "creativity": 0.9, "logic": 0.8 },
+    "traits": { "mbti": "ENTP" },
+    "moral_compass": { "alignment": "Chaotic Good" }
+  },
+  "linguistics": {
+    "text_style": { "formality_level": 0.2, "slang_usage": true }
+  },
+  "motivations": {
+    "core_drive": "Push boundaries and explore possibilities"
+  }
+}
+'''
+```
+
+#### AIEOS Schema Sections
+
+| Section | Description |
+|---------|-------------|
+| `identity` | Names, bio, origin, residence |
+| `psychology` | Neural matrix (cognitive weights), MBTI, OCEAN, moral compass |
+| `linguistics` | Text style, formality, catchphrases, forbidden words |
+| `motivations` | Core drive, short/long-term goals, fears |
+| `capabilities` | Skills and tools the agent can access |
+| `physicality` | Visual descriptors for image generation |
+| `history` | Origin story, education, occupation |
+| `interests` | Hobbies, favorites, lifestyle |
+
+See [aieos.org](https://aieos.org) for the full schema and live examples.
 
 ## Gateway API
 
@@ -252,6 +367,8 @@ enabled = false                 # opt-in: 1000+ OAuth apps via composio.dev
 | `/health` | GET | None | Health check (always public, no secrets leaked) |
 | `/pair` | POST | `X-Pairing-Code` header | Exchange one-time code for bearer token |
 | `/webhook` | POST | `Authorization: Bearer <token>` | Send message: `{"message": "your prompt"}` |
+| `/whatsapp` | GET | Query params | Meta webhook verification (hub.mode, hub.verify_token, hub.challenge) |
+| `/whatsapp` | POST | None (Meta signature) | WhatsApp incoming message webhook |
 
 ## Commands
 

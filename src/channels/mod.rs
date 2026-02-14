@@ -5,6 +5,7 @@ pub mod matrix;
 pub mod slack;
 pub mod telegram;
 pub mod traits;
+pub mod whatsapp;
 
 pub use cli::CliChannel;
 pub use discord::DiscordChannel;
@@ -13,6 +14,7 @@ pub use matrix::MatrixChannel;
 pub use slack::SlackChannel;
 pub use telegram::TelegramChannel;
 pub use traits::Channel;
+pub use whatsapp::WhatsAppChannel;
 
 use crate::config::Config;
 use crate::memory::{self, Memory};
@@ -186,6 +188,38 @@ pub fn build_system_prompt(
     }
 }
 
+/// Inject OpenClaw (markdown) identity files into the prompt
+fn inject_openclaw_identity(prompt: &mut String, workspace_dir: &std::path::Path) {
+    #[allow(unused_imports)]
+    use std::fmt::Write;
+
+    prompt.push_str("## Project Context\n\n");
+    prompt
+        .push_str("The following workspace files define your identity, behavior, and context.\n\n");
+
+    let bootstrap_files = [
+        "AGENTS.md",
+        "SOUL.md",
+        "TOOLS.md",
+        "IDENTITY.md",
+        "USER.md",
+        "HEARTBEAT.md",
+    ];
+
+    for filename in &bootstrap_files {
+        inject_workspace_file(prompt, workspace_dir, filename);
+    }
+
+    // BOOTSTRAP.md — only if it exists (first-run ritual)
+    let bootstrap_path = workspace_dir.join("BOOTSTRAP.md");
+    if bootstrap_path.exists() {
+        inject_workspace_file(prompt, workspace_dir, "BOOTSTRAP.md");
+    }
+
+    // MEMORY.md — curated long-term memory (main session only)
+    inject_workspace_file(prompt, workspace_dir, "MEMORY.md");
+}
+
 /// Inject a single workspace file into the prompt with truncation and missing-file markers.
 fn inject_workspace_file(prompt: &mut String, workspace_dir: &std::path::Path, filename: &str) {
     use std::fmt::Write;
@@ -236,6 +270,7 @@ pub fn handle_command(command: super::ChannelCommands, config: &Config) -> Resul
                 ("Webhook", config.channels_config.webhook.is_some()),
                 ("iMessage", config.channels_config.imessage.is_some()),
                 ("Matrix", config.channels_config.matrix.is_some()),
+                ("WhatsApp", config.channels_config.whatsapp.is_some()),
             ] {
                 println!("  {} {name}", if configured { "✅" } else { "❌" });
             }
@@ -326,6 +361,18 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
                 mx.access_token.clone(),
                 mx.room_id.clone(),
                 mx.allowed_users.clone(),
+            )),
+        ));
+    }
+
+    if let Some(ref wa) = config.channels_config.whatsapp {
+        channels.push((
+            "WhatsApp",
+            Arc::new(WhatsAppChannel::new(
+                wa.access_token.clone(),
+                wa.phone_number_id.clone(),
+                wa.verify_token.clone(),
+                wa.allowed_numbers.clone(),
             )),
         ));
     }
@@ -478,6 +525,15 @@ pub async fn start_channels(config: Config) -> Result<()> {
             mx.access_token.clone(),
             mx.room_id.clone(),
             mx.allowed_users.clone(),
+        )));
+    }
+
+    if let Some(ref wa) = config.channels_config.whatsapp {
+        channels.push(Arc::new(WhatsAppChannel::new(
+            wa.access_token.clone(),
+            wa.phone_number_id.clone(),
+            wa.verify_token.clone(),
+            wa.allowed_numbers.clone(),
         )));
     }
 
