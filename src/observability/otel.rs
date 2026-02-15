@@ -1,14 +1,16 @@
 use super::traits::{Observer, ObserverEvent, ObserverMetric};
-use opentelemetry::metrics::{Counter, Histogram, UpDownCounter};
+use opentelemetry::metrics::{Counter, Gauge, Histogram};
 use opentelemetry::trace::{Span, SpanKind, Status, Tracer};
 use opentelemetry::{global, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use std::time::SystemTime;
 
 /// OpenTelemetry-backed observer — exports traces and metrics via OTLP.
 pub struct OtelObserver {
     tracer_provider: SdkTracerProvider,
+    meter_provider: SdkMeterProvider,
 
     // Metrics instruments
     agent_starts: Counter<u64>,
@@ -19,9 +21,9 @@ pub struct OtelObserver {
     heartbeat_ticks: Counter<u64>,
     errors: Counter<u64>,
     request_latency: Histogram<f64>,
-    tokens_used: UpDownCounter<i64>,
-    active_sessions: UpDownCounter<i64>,
-    queue_depth: UpDownCounter<i64>,
+    tokens_used: Counter<u64>,
+    active_sessions: Gauge<u64>,
+    queue_depth: Gauge<u64>,
 }
 
 impl OtelObserver {
@@ -66,6 +68,7 @@ impl OtelObserver {
                 .build())
             .build();
 
+        let meter_provider_clone = meter_provider.clone();
         global::set_meter_provider(meter_provider);
 
         // ── Create metric instruments ────────────────────────────
@@ -115,22 +118,23 @@ impl OtelObserver {
             .build();
 
         let tokens_used = meter
-            .i64_up_down_counter("zeroclaw.tokens.used")
-            .with_description("Tokens used in last request")
+            .u64_counter("zeroclaw.tokens.used")
+            .with_description("Total tokens consumed (monotonic)")
             .build();
 
         let active_sessions = meter
-            .i64_up_down_counter("zeroclaw.sessions.active")
-            .with_description("Number of active sessions")
+            .u64_gauge("zeroclaw.sessions.active")
+            .with_description("Current number of active sessions")
             .build();
 
         let queue_depth = meter
-            .i64_up_down_counter("zeroclaw.queue.depth")
-            .with_description("Message queue depth")
+            .u64_gauge("zeroclaw.queue.depth")
+            .with_description("Current message queue depth")
             .build();
 
         Ok(Self {
             tracer_provider,
+            meter_provider: meter_provider_clone,
             agent_starts,
             agent_duration,
             tool_calls,
@@ -184,9 +188,8 @@ impl Observer for OtelObserver {
                 span.end();
 
                 self.agent_duration.record(secs, &[]);
-                if let Some(t) = tokens_used {
-                    self.tokens_used.add(*t as i64, &[]);
-                }
+                // Note: tokens are recorded via record_metric(TokensUsed) to avoid
+                // double-counting. AgentEnd only records duration.
             }
             ObserverEvent::ToolCall {
                 tool,
@@ -260,13 +263,13 @@ impl Observer for OtelObserver {
                 self.request_latency.record(d.as_secs_f64(), &[]);
             }
             ObserverMetric::TokensUsed(t) => {
-                self.tokens_used.add(*t as i64, &[]);
+                self.tokens_used.add(*t as u64, &[]);
             }
             ObserverMetric::ActiveSessions(s) => {
-                self.active_sessions.add(*s as i64, &[]);
+                self.active_sessions.record(*s as u64, &[]);
             }
             ObserverMetric::QueueDepth(d) => {
-                self.queue_depth.add(*d as i64, &[]);
+                self.queue_depth.record(*d as u64, &[]);
             }
         }
     }
@@ -274,6 +277,9 @@ impl Observer for OtelObserver {
     fn flush(&self) {
         if let Err(e) = self.tracer_provider.force_flush() {
             tracing::warn!("OTel trace flush failed: {e}");
+        }
+        if let Err(e) = self.meter_provider.force_flush() {
+            tracing::warn!("OTel metric flush failed: {e}");
         }
     }
 
