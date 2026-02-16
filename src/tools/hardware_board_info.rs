@@ -55,7 +55,12 @@ impl HardwareBoardInfoTool {
         BOARD_INFO
             .iter()
             .find(|(b, _, _)| *b == board)
-            .map(|(_, chip, desc)| format!("**Board:** {}\n**Chip:** {}\n**Description:** {}", board, chip, desc))
+            .map(|(_, chip, desc)| {
+                format!(
+                    "**Board:** {}\n**Chip:** {}\n**Description:** {}",
+                    board, chip, desc
+                )
+            })
     }
 }
 
@@ -133,7 +138,10 @@ impl Tool for HardwareBoardInfoTool {
                 output.push_str(&format!("\n\n**Memory map:**\n{}", mem));
             }
         } else {
-            output.push_str(&format!("Board '{}' configured. No static info available.", board));
+            output.push_str(&format!(
+                "Board '{}' configured. No static info available.",
+                board
+            ));
         }
 
         Ok(ToolResult {
@@ -149,16 +157,14 @@ fn probe_board_info(chip: &str) -> anyhow::Result<String> {
     use probe_rs::config::MemoryRegion;
     use probe_rs::{Permissions, Session};
 
-    let session = Session::auto_attach(chip, Permissions::default())
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let session =
+        Session::auto_attach(chip, Permissions::default()).map_err(|e| anyhow::anyhow!("{}", e))?;
     let target = session.target();
     let arch = session.architecture();
 
     let mut out = format!(
         "**Board:** {}\n**Chip:** {}\n**Architecture:** {:?}\n\n**Memory map:**\n",
-        chip,
-        target.name,
-        arch
+        chip, target.name, arch
     );
     for region in target.memory_map.iter() {
         match region {

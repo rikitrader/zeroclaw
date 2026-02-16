@@ -87,8 +87,8 @@ fn probe_memory_map(chip: &str) -> anyhow::Result<String> {
     use probe_rs::config::MemoryRegion;
     use probe_rs::{Permissions, Session};
 
-    let session = Session::auto_attach(chip, Permissions::default())
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let session =
+        Session::auto_attach(chip, Permissions::default()).map_err(|e| anyhow::anyhow!("{}", e))?;
     let target = session.target();
     let mut out = String::new();
     for region in target.memory_map.iter() {

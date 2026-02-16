@@ -68,8 +68,11 @@ fn parse_pin_aliases(content: &str) -> PinAliases {
                 let alias = parts[1].trim().to_lowercase().replace(' ', "_");
                 let pin_str = parts[2].trim();
                 // Skip header row and separator (|---|)
-                if alias.eq("alias") || alias.eq("pin") || pin_str.eq("pin")
-                    || alias.contains("---") || pin_str.contains("---")
+                if alias.eq("alias")
+                    || alias.eq("pin")
+                    || pin_str.eq("pin")
+                    || alias.contains("---")
+                    || pin_str.contains("---")
                 {
                     continue;
                 }
@@ -348,7 +351,10 @@ user_led: 5"#;
     fn infer_board_from_path_nucleo() {
         let base = std::path::Path::new("/base");
         let path = std::path::Path::new("/base/nucleo-f401re.md");
-        assert_eq!(infer_board_from_path(path, base), Some("nucleo-f401re".into()));
+        assert_eq!(
+            infer_board_from_path(path, base),
+            Some("nucleo-f401re".into())
+        );
     }
 
     #[test]

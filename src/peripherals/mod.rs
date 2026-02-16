@@ -9,17 +9,17 @@ pub mod traits;
 pub mod serial;
 
 #[cfg(feature = "hardware")]
+pub mod arduino_flash;
+#[cfg(feature = "hardware")]
 pub mod arduino_upload;
 #[cfg(feature = "hardware")]
-pub mod arduino_flash;
+pub mod capabilities_tool;
 #[cfg(feature = "hardware")]
 pub mod nucleo_flash;
 #[cfg(feature = "hardware")]
 pub mod uno_q_bridge;
 #[cfg(feature = "hardware")]
 pub mod uno_q_setup;
-#[cfg(feature = "hardware")]
-pub mod capabilities_tool;
 
 #[cfg(all(feature = "peripheral-rpi", target_os = "linux"))]
 pub mod rpi;
@@ -67,11 +67,7 @@ pub fn handle_command(cmd: crate::PeripheralCommands, config: &Config) -> Result
             }
         }
         crate::PeripheralCommands::Add { board, path } => {
-            let transport = if path == "native" {
-                "native"
-            } else {
-                "serial"
-            };
+            let transport = if path == "native" { "native" } else { "serial" };
             let path_opt = if path == "native" {
                 None
             } else {
@@ -81,7 +77,8 @@ pub fn handle_command(cmd: crate::PeripheralCommands, config: &Config) -> Result
             let mut cfg = crate::config::Config::load_or_init()?;
             cfg.peripherals.enabled = true;
 
-            if cfg.peripherals
+            if cfg
+                .peripherals
                 .boards
                 .iter()
                 .any(|b| b.board == board && b.path.as_deref() == path_opt.as_deref())
@@ -148,8 +145,7 @@ pub async fn create_peripheral_tools(config: &PeripheralsConfig) -> Result<Vec<B
 
     for board in &config.boards {
         // Arduino Uno Q: Bridge transport (socket to local Bridge app)
-        if board.transport == "bridge"
-            && (board.board == "arduino-uno-q" || board.board == "uno-q")
+        if board.transport == "bridge" && (board.board == "arduino-uno-q" || board.board == "uno-q")
         {
             tools.push(Box::new(uno_q_bridge::UnoQGpioReadTool));
             tools.push(Box::new(uno_q_bridge::UnoQGpioWriteTool));
@@ -211,8 +207,12 @@ pub async fn create_peripheral_tools(config: &PeripheralsConfig) -> Result<Vec<B
     if !tools.is_empty() {
         let board_names: Vec<String> = config.boards.iter().map(|b| b.board.clone()).collect();
         tools.push(Box::new(HardwareMemoryMapTool::new(board_names.clone())));
-        tools.push(Box::new(crate::tools::HardwareBoardInfoTool::new(board_names.clone())));
-        tools.push(Box::new(crate::tools::HardwareMemoryReadTool::new(board_names)));
+        tools.push(Box::new(crate::tools::HardwareBoardInfoTool::new(
+            board_names.clone(),
+        )));
+        tools.push(Box::new(crate::tools::HardwareMemoryReadTool::new(
+            board_names,
+        )));
     }
 
     // Phase C: Add hardware_capabilities tool when any serial boards

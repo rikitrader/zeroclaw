@@ -15,12 +15,9 @@ const BRIDGE_PORT: u16 = 9999;
 
 async fn bridge_request(cmd: &str, args: &[String]) -> anyhow::Result<String> {
     let addr = format!("{}:{}", BRIDGE_HOST, BRIDGE_PORT);
-    let mut stream = tokio::time::timeout(
-        Duration::from_secs(5),
-        TcpStream::connect(&addr),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("Bridge connection timed out"))??;
+    let mut stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr))
+        .await
+        .map_err(|_| anyhow::anyhow!("Bridge connection timed out"))??;
 
     let msg = format!("{} {}\n", cmd, args.join(" "));
     stream.write_all(msg.as_bytes()).await?;

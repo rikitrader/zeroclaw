@@ -113,6 +113,8 @@ pub fn run_wizard() -> Result<Config> {
         identity: crate::config::IdentityConfig::default(),
         peripherals: crate::config::PeripheralsConfig::default(),
         agent: crate::config::AgentConfig::default(),
+        agents: std::collections::HashMap::new(),
+        hardware: hardware_config,
     };
 
     println!(
@@ -307,6 +309,8 @@ pub fn run_quick_setup(
         identity: crate::config::IdentityConfig::default(),
         peripherals: crate::config::PeripheralsConfig::default(),
         agent: crate::config::AgentConfig::default(),
+        agents: std::collections::HashMap::new(),
+        hardware: crate::config::HardwareConfig::default(),
     };
 
     config.save()?;

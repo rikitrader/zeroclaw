@@ -96,10 +96,7 @@ impl Tool for HardwareMemoryReadTool {
             .unwrap_or("0x20000000");
         let address = parse_hex_address(address_str).unwrap_or(NUCLEO_RAM_BASE);
 
-        let length = args
-            .get("length")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(128) as usize;
+        let length = args.get("length").and_then(|v| v.as_u64()).unwrap_or(128) as usize;
         let length = length.min(256).max(1);
 
         #[cfg(feature = "probe")]
@@ -150,8 +147,8 @@ fn probe_read_memory(chip: &str, address: u64, length: usize) -> anyhow::Result<
     use probe_rs::Permissions;
     use probe_rs::Session;
 
-    let mut session = Session::auto_attach(chip, Permissions::default())
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let mut session =
+        Session::auto_attach(chip, Permissions::default()).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let mut core = session.core(0)?;
     let mut buf = vec![0u8; length];
@@ -170,7 +167,13 @@ fn probe_read_memory(chip: &str, address: u64, length: usize) -> anyhow::Result<
             .join(" ");
         let ascii: String = chunk
             .iter()
-            .map(|&b| if b.is_ascii_graphic() || b == b' ' { b as char } else { '.' })
+            .map(|&b| {
+                if b.is_ascii_graphic() || b == b' ' {
+                    b as char
+                } else {
+                    '.'
+                }
+            })
             .collect();
         out.push_str(&format!("0x{:08X}  {:48}  {}\n", addr, hex, ascii));
     }

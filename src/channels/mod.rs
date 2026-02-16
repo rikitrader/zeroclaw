@@ -44,6 +44,43 @@ const DEFAULT_CHANNEL_MAX_BACKOFF_SECS: u64 = 60;
 /// Timeout for processing a single channel message (LLM + tools).
 /// 300s for on-device LLMs (Ollama) which are slower than cloud APIs.
 const CHANNEL_MESSAGE_TIMEOUT_SECS: u64 = 300;
+const CHANNEL_PARALLELISM_PER_CHANNEL: usize = 4;
+const CHANNEL_MIN_IN_FLIGHT_MESSAGES: usize = 8;
+const CHANNEL_MAX_IN_FLIGHT_MESSAGES: usize = 64;
+
+#[derive(Clone)]
+struct ChannelRuntimeContext {
+    channels_by_name: Arc<HashMap<String, Arc<dyn Channel>>>,
+    provider: Arc<dyn Provider>,
+    provider_name: Arc<String>,
+    memory: Arc<dyn Memory>,
+    tools_registry: Arc<Vec<Box<dyn Tool>>>,
+    observer: Arc<dyn Observer>,
+    system_prompt: Arc<String>,
+    model: Arc<String>,
+    temperature: f64,
+    auto_save_memory: bool,
+}
+
+fn conversation_memory_key(msg: &traits::ChannelMessage) -> String {
+    format!("{}_{}_{}", msg.channel, msg.sender, msg.id)
+}
+
+async fn build_memory_context(mem: &dyn Memory, user_msg: &str) -> String {
+    let mut context = String::new();
+
+    if let Ok(entries) = mem.recall(user_msg, 5).await {
+        if !entries.is_empty() {
+            context.push_str("[Memory context]\n");
+            for entry in &entries {
+                let _ = writeln!(context, "- {}: {}", entry.key, entry.content);
+            }
+            context.push('\n');
+        }
+    }
+
+    context
+}
 
 fn spawn_supervised_listener(
     ch: Arc<dyn Channel>,
@@ -154,6 +191,7 @@ async fn process_channel_message(ctx: Arc<ChannelRuntimeContext>, msg: traits::C
             ctx.provider_name.as_str(),
             ctx.model.as_str(),
             ctx.temperature,
+            true, // silent — channels don't write to stdout
         ),
     )
     .await;
@@ -797,7 +835,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
     } else {
         None
     };
-    let system_prompt = build_system_prompt(
+    let mut system_prompt = build_system_prompt(
         &workspace,
         &model,
         &tool_descs,
@@ -946,88 +984,20 @@ pub async fn start_channels(config: Config) -> Result<()> {
 
     println!("  🚦 In-flight message limit: {max_in_flight_messages}");
 
-        // Use full agent (tools, peripherals) when hardware is configured; otherwise simple chat
-        let use_agent = config.peripherals.enabled && !config.peripherals.boards.is_empty();
-        println!("  ⏳ Processing message...");
-        let started_at = Instant::now();
+    let runtime_ctx = Arc::new(ChannelRuntimeContext {
+        channels_by_name,
+        provider: Arc::clone(&provider),
+        provider_name: Arc::new(provider_name),
+        memory: Arc::clone(&mem),
+        tools_registry: Arc::clone(&tools_registry),
+        observer,
+        system_prompt: Arc::new(system_prompt),
+        model: Arc::new(model.clone()),
+        temperature,
+        auto_save_memory: config.memory.auto_save,
+    });
 
-        let llm_result = if use_agent {
-            let config_clone = config.clone();
-            let content = msg.content.clone();
-            tokio::time::timeout(
-                Duration::from_secs(CHANNEL_MESSAGE_TIMEOUT_SECS),
-                crate::agent::process_message(config_clone, &content),
-            )
-            .await
-        } else {
-            let provider = provider.clone();
-            let system_prompt = system_prompt.clone();
-            let content = msg.content.clone();
-            let model = model.clone();
-            tokio::time::timeout(
-                Duration::from_secs(CHANNEL_MESSAGE_TIMEOUT_SECS),
-                async move {
-                    provider
-                        .chat_with_system(Some(&system_prompt), &content, &model, temperature)
-                        .await
-                },
-            )
-            .await
-        };
-
-        match llm_result {
-            Ok(Ok(response)) => {
-                println!(
-                    "  🤖 Reply ({}ms): {}",
-                    started_at.elapsed().as_millis(),
-                    truncate_with_ellipsis(&response, 80)
-                );
-                // Find the channel that sent this message and reply
-                for ch in &channels {
-                    if ch.name() == msg.channel {
-                        if let Err(e) = ch.send(&response, &msg.sender).await {
-                            eprintln!("  ❌ Failed to reply on {}: {e}", ch.name());
-                        }
-                        break;
-                    }
-                }
-            }
-            Ok(Err(e)) => {
-                eprintln!(
-                    "  ❌ LLM error after {}ms: {e}",
-                    started_at.elapsed().as_millis()
-                );
-                for ch in &channels {
-                    if ch.name() == msg.channel {
-                        let _ = ch.send(&format!("⚠️ Error: {e}"), &msg.sender).await;
-                        break;
-                    }
-                }
-            }
-            Err(_) => {
-                let timeout_msg = format!(
-                    "LLM response timed out after {}s",
-                    CHANNEL_MESSAGE_TIMEOUT_SECS
-                );
-                eprintln!(
-                    "  ❌ {} (elapsed: {}ms)",
-                    timeout_msg,
-                    started_at.elapsed().as_millis()
-                );
-                for ch in &channels {
-                    if ch.name() == msg.channel {
-                        let _ = ch
-                            .send(
-                                "⚠️ Request timed out while waiting for the model. Please try again.",
-                                &msg.sender,
-                            )
-                            .await;
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    run_message_dispatch_loop(rx, runtime_ctx, max_in_flight_messages).await;
 
     // Wait for all channel tasks
     for h in handles {

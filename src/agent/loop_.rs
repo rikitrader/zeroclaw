@@ -413,7 +413,7 @@ struct ParsedToolCall {
 /// Execute a single turn of the agent loop: send messages, parse tool calls,
 /// execute tools, and loop until the LLM produces a final text response.
 /// When `silent` is true, suppresses stdout (for channel use).
-async fn agent_turn(
+pub(crate) async fn agent_turn(
     provider: &dyn Provider,
     history: &mut Vec<ChatMessage>,
     tools_registry: &[Box<dyn Tool>],
@@ -431,6 +431,7 @@ async fn agent_turn(
         provider_name,
         model,
         temperature,
+        silent,
     )
     .await
 }
@@ -499,13 +500,17 @@ pub(crate) async fn run_tool_call_loop(
 
         if tool_calls.is_empty() {
             // No tool calls — this is the final response
-            history.push(ChatMessage::assistant(&response));
-            return Ok(if text.is_empty() { response } else { text });
+            history.push(ChatMessage::assistant(response_text.clone()));
+            return Ok(if parsed_text.is_empty() {
+                response_text
+            } else {
+                parsed_text
+            });
         }
 
         // Print any text the LLM produced alongside tool calls (unless silent)
-        if !silent && !text.is_empty() {
-            print!("{text}");
+        if !silent && !parsed_text.is_empty() {
+            print!("{parsed_text}");
             let _ = std::io::stdout().flush();
         }
 
@@ -551,7 +556,7 @@ pub(crate) async fn run_tool_call_loop(
         }
 
         // Add assistant message with tool calls + tool results to history
-        history.push(ChatMessage::assistant(&response));
+        history.push(ChatMessage::assistant(assistant_history_content.clone()));
         history.push(ChatMessage::user(format!("[Tool results]\n{tool_results}")));
     }
 
@@ -599,14 +604,7 @@ pub async fn run(
 ) -> Result<()> {
     // ── Wire up agnostic subsystems ──────────────────────────────
     let base_observer = observability::create_observer(&config.observability);
-    let observer: Arc<dyn Observer> = if verbose {
-        Arc::from(Box::new(observability::MultiObserver::new(vec![
-            base_observer,
-            Box::new(observability::VerboseObserver::new()),
-        ])) as Box<dyn Observer>)
-    } else {
-        Arc::from(base_observer)
-    };
+    let observer: Arc<dyn Observer> = Arc::from(base_observer);
     let runtime: Arc<dyn runtime::RuntimeAdapter> =
         Arc::from(runtime::create_runtime(&config.runtime)?);
     let security = Arc::new(SecurityPolicy::from_config(
@@ -969,6 +967,10 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         mem.clone(),
         composio_key,
         &config.browser,
+        &config.http_request,
+        &config.workspace_dir,
+        &config.agents,
+        config.api_key.as_deref(),
     );
     let peripheral_tools: Vec<Box<dyn Tool>> =
         crate::peripherals::create_peripheral_tools(&config.peripherals).await?;
@@ -1084,6 +1086,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         &mut history,
         &tools_registry,
         observer.as_ref(),
+        provider_name,
         &model_name,
         config.default_temperature,
         true,
