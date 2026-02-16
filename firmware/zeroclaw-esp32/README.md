@@ -2,6 +2,8 @@
 
 Peripheral firmware for ESP32 — speaks the same JSON-over-serial protocol as the STM32 firmware. Flash this to your ESP32, then configure ZeroClaw on the host to connect via serial.
 
+**New to this?** See [SETUP.md](SETUP.md) for step-by-step commands and troubleshooting.
+
 ## Protocol
 
 - **Request** (host → ESP32): `{"id":"1","cmd":"gpio_write","args":{"pin":13,"value":1}}\n`
