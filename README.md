@@ -62,6 +62,235 @@ ls -lh target/release/zeroclaw
 /usr/bin/time -l target/release/zeroclaw status
 ```
 
+## Voice Support (STT/TTS) - Cloud + Local
+
+ZeroClaw includes comprehensive **Speech-to-Text (STT)** and **Text-to-Speech (TTS)** capabilities with both **cloud providers** and **local/offline models**.
+
+### Provider Coverage
+
+| Type | STT Providers | TTS Providers |
+|------|---------------|---------------|
+| **Cloud** | OpenAI Whisper, Google Cloud Speech-to-Text, Azure Speech, Deepgram | OpenAI TTS, ElevenLabs, Google Cloud TTS, Azure Speech, Amazon Polly |
+| **Local** | **Whisper.cpp** (fast offline), **Vosk** (lightweight) | **Piper** (fast neural TTS), **espeak-ng** (basic fallback) |
+
+### Cloud Providers (Internet Required)
+
+**STT Cloud:**
+- **OpenAI Whisper API** (`whisper-1`, `whisper-1-hd`) - High accuracy, multilingual
+- **Google Cloud Speech-to-Text** - 120+ languages, word timestamps
+- **Azure Speech Services** - Conversational, custom models
+- **Deepgram** - Real-time streaming, noise-robust
+
+**TTS Cloud:**
+- **OpenAI TTS** (`tts-1`, `tts-1-hd`) - Voices: alloy, echo, fable, onyx, nova, shimmer
+- **ElevenLabs** - Premium ultra-realistic voices
+- **Google Cloud TTS** - Neural2, Studio voices, WaveNet
+- **Azure Speech** - Neural voices, SSML support
+- **Amazon Polly** - Neural & Standard voices, 100+ voices
+
+### Local Providers (Offline/Privacy-First) 🔒
+
+**STT Local:**
+- **Whisper.cpp** - Fast on-device Whisper inference
+  - Models: `ggml-base.en.bin`, `ggml-small.en.bin`, `ggml-medium.en.bin`, `ggml-large-v3` (quantized: q5_0, q5_1, q8_0)
+  - GPU acceleration (Metal on macOS, CUDA on Linux)
+  - Beam size tuning (higher = more accurate, slower)
+  - Multi-language support
+
+- **Vosk** - Lightweight offline speech recognition
+  - Python API integration or vosk-transcriber CLI
+  - 20+ languages with small model sizes
+  - Real-time transcription with word timestamps
+
+**TTS Local:**
+- **Piper** - Fast, local neural TTS
+  - Models: `en_US-lessac-medium`, `en_US-amy-medium`, multilingual voices
+  - Low latency (<200ms), high quality
+  - Configurable sentence silence margins
+
+- **espeak-ng** - Basic fallback TTS
+  - 40+ languages, robot-like voice
+  - Instant synthesis, minimal resources
+  - Pitch/rate/speed adjustment
+
+### Voice Configuration
+
+```toml
+[channels_config.voice]
+enabled = true
+
+# STT Configuration
+stt_provider = "whisper_cpp"  # "openai", "google", "azure", "deepgram", "whisper_cpp", "vosk"
+stt_model = "ggml-base.en"    # Provider-specific model
+stt_language = "en-US"
+stt_sample_rate = 16000
+
+# Local model path (optional - auto-detects common locations)
+stt_model_path = "/path/to/models/ggml-base.en.bin"
+stt_num_threads = 4           # Auto-detects CPU cores if not set
+stt_use_gpu = false          # Enable GPU acceleration (if available)
+stt_quantization = "q5_0"    # Model quantization for faster inference
+stt_beam_size = 5            # Beam size for decoding (higher = more accurate)
+
+# TTS Configuration
+tts_provider = "piper"        # "openai", "elevenlabs", "google", "azure", "amazon", "piper", "espeak"
+tts_model = "en_US-lessac-medium"
+tts_language = "en-US"
+tts_sample_rate = 22050
+tts_rate = 1.0                # Speaking rate (0.1 to 2.0)
+tts_pitch = 0.0               # Pitch adjustment (-20 to 20 semitones)
+tts_format = "wav"             # "mp3", "wav", "opus", "pcm"
+
+# Local TTS model path (optional - auto-detects common locations)
+tts_model_path = "/path/to/models/en_US-lessac-medium.onnx"
+tts_sentence_silence = 0.2    # Seconds of silence after sentences
+
+# Voice Channel Settings
+wake_word = "hey assistant"    # Activate listening on wake word
+vad_enabled = true           # Voice Activity Detection
+vad_threshold = 0.01         # Sensitivity (0.0 to 1.0)
+silence_timeout = 2.0         # Seconds of silence to stop recording
+min_speech_duration = 0.5   # Minimum speech duration (seconds)
+auto_start = true            # Auto-start listening on channel start
+```
+
+### Model Installation
+
+**Whisper.cpp Models:**
+```bash
+# Download models from HuggingFace
+mkdir -p ~/.local/share/whisper
+cd ~/.local/share/whisper
+
+# Base English model (~150MB)
+wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+
+# Small English model (~75MB) - faster but less accurate
+wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin
+
+# Quantized models (smaller, faster)
+wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin.q5_0.bin
+```
+
+**Vosk Models:**
+```bash
+# Download models from Vosk website
+mkdir -p ~/.local/share/vosk
+cd ~/.local/share/vosk
+
+# English small model (~50MB)
+wget https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+unzip vosk-model-small-en-us-0.15.zip
+
+# Other languages available at https://alphacephei.com/vosk/models
+```
+
+**Piper Voices:**
+```bash
+# Download voices from Piper releases
+mkdir -p ~/.local/share/piper
+cd ~/.local/share/piper
+
+# English Lessac medium model (~80MB)
+wget https://github.com/rhasspy/piper/releases/download/v1.2.0/viper-tract_v1.2.0-en_US-lessac-medium.tar.gz
+tar -xzf piper-tract_v1.2.0-en_US-lessac-medium.tar.gz
+
+# Multilingual voices available at https://github.com/rhasspy/piper/releases
+```
+
+**espeak-ng:**
+```bash
+# Install via package manager
+# macOS
+brew install espeak-ng
+
+# Linux (Debian/Ubuntu)
+sudo apt-get install espeak-ng
+
+# Linux (Arch)
+sudo pacman -S espeak-ng
+
+# Voice data files are included by default
+```
+
+### Usage Examples
+
+**Enable voice channel in config:**
+```toml
+[channels_config.voice]
+enabled = true
+stt_provider = "whisper_cpp"
+tts_provider = "piper
+wake_word = "ok zero"
+```
+
+**Voice channel commands:**
+```bash
+# Start channels with voice enabled
+zeroclaw channel start
+
+# Voice channel will listen for wake word "ok zero"
+# Then transcribe and respond via speech
+```
+
+### Automatic Cloud/Local Fallback
+
+ZeroClaw automatically falls back to alternative providers if the primary fails:
+
+```toml
+[channels_config.voice]
+stt_provider = "whisper_cpp"  # Try local first
+stt_fallback = "openai"      # Fall back to cloud if local unavailable
+```
+
+**Provider priority (STT):** Whisper.cpp → Vosk → OpenAI → Google → Azure → Deepgram
+**Provider priority (TTS):** Piper → espeak-ng → OpenAI → ElevenLabs → Google → Azure → Amazon
+
+### Performance Comparison
+
+| Provider | Latency | Quality | Offline | Cost |
+|----------|---------|--------|---------|------|
+| **Whisper.cpp** | ~500ms (base), ~1s (medium) | High | ✅ | Free (local) |
+| **Vosk** | ~200ms | Medium | ✅ | Free (local) |
+| **OpenAI Whisper** | ~1s | Very High | ❌ | $0.006/min |
+| **Piper** | ~150ms | High | ✅ | Free (local) |
+| **espeak-ng** | ~50ms | Low | ✅ | Free (local) |
+| **OpenAI TTS** | ~300ms | Very High | ❌ | $0.015/1K chars |
+| **ElevenLabs** | ~200ms | Premium | ❌ | $0.030/1K chars |
+
+### Hybrid Cloud/Local Mode
+
+For best performance and privacy:
+- **Primary:** Use local providers (Whisper.cpp + Piper)
+- **Fallback:** Cloud providers for complex queries or additional languages
+- **Offline mode:** Fully local when internet unavailable
+
+```toml
+[channels_config.voice]
+stt_provider = "whisper_cpp"
+stt_fallback = "openai"
+tts_provider = "piper"
+tts_fallback = "openai"
+```
+
+This configuration gives you:
+- **Privacy:** Local processing by default
+- **Reliability:** Cloud fallback if local unavailable
+- **Quality:** High-quality local models
+- **Cost:** Free for most usage
+
+### Architecture Integration
+
+Voice modules are fully integrated with ZeroClaw's channel system:
+
+- **VoiceChannel** implements the `Channel` trait for voice-based AI interaction
+- **Wake word detection** activates listening (default: "hey assistant")
+- **Voice Activity Detection (VAD)** automatically starts/stops recording
+- **Full-duplex audio** with thread-safe capture/playback via `cpal` and `rodio`
+- **Automatic provider fallback** ensures reliability
+
+The voice system is modular and extensible — add new providers by implementing `SttProvider` or `TtsProvider` traits.
+
 ## Quick Start
 
 ```bash

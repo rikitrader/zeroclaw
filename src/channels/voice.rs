@@ -4,8 +4,8 @@
 
 use super::traits::Channel;
 use crate::audio::{AudioCapture, AudioPlayback, AudioConfig};
-use crate::stt::{SttEngine, SttConfig};
-use crate::tts::{TtsEngine, TtsConfig};
+use crate::stt::{SttEngine, SttConfig, SttProvider};
+use crate::tts::{TtsEngine, TtsConfig, TtsProvider};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
@@ -155,7 +155,7 @@ impl VoiceChannel {
     /// Capture audio and transcribe to text
     async fn capture_and_transcribe(&self) -> Result<String> {
         // Capture audio
-        let audio_data = self.capture.record_until_silence(
+        let audio_data: Vec<f32> = self.capture.record_until_silence(
             self.vad_threshold,
             self.min_speech_duration,
             self.silence_timeout,
@@ -313,6 +313,7 @@ impl Channel for VoiceChannel {
     async fn health_check(&self) -> bool {
         // Check if STT provider is available
         let stt_available = if let Some(provider) = self.stt_engine.default_provider() {
+            let provider: &dyn SttProvider = provider;
             provider.is_available().await
         } else {
             false
@@ -320,6 +321,7 @@ impl Channel for VoiceChannel {
 
         // Check if TTS provider is available
         let tts_available = if let Some(provider) = self.tts_engine.default_provider() {
+            let provider: &dyn TtsProvider = provider;
             provider.is_available().await
         } else {
             false

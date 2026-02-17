@@ -7,12 +7,16 @@ mod azure;
 mod elevenlabs;
 mod google;
 mod openai;
+mod piper;
+mod espeak;
 
 pub use amazon::AmazonTtsProvider;
 pub use azure::AzureTtsProvider;
 pub use elevenlabs::ElevenLabsTtsProvider;
 pub use google::GoogleTtsProvider;
 pub use openai::OpenAiTtsProvider;
+pub use piper::PiperTtsProvider;
+pub use espeak::EspeakTtsProvider;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -25,11 +29,15 @@ use serde::{Deserialize, Serialize};
 /// TTS provider type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TtsProviderType {
+    // Cloud providers
     OpenAi,
     ElevenLabs,
     Google,
     Azure,
     Amazon,
+    // Local providers
+    Piper,
+    Espeak,
 }
 
 /// Voice gender
@@ -67,6 +75,17 @@ pub struct TtsConfig {
     pub enable_ssml: bool,
     /// Timeout in seconds
     pub timeout_secs: u64,
+    // Local model configuration
+    /// Path to local model directory (for Piper, espeak)
+    pub model_path: Option<String>,
+    /// Number of threads for local inference
+    pub num_threads: Option<usize>,
+    /// Use GPU acceleration if available
+    pub use_gpu: bool,
+    /// Model quantization (for Piper): "q5_0", "q5_1", "q8_0", etc.
+    pub quantization: Option<String>,
+    /// Sentence silence margin (for Piper) - how much silence to add after sentences
+    pub sentence_silence: Option<f32>,
 }
 
 impl Default for TtsConfig {
@@ -84,6 +103,11 @@ impl Default for TtsConfig {
             output_format: "mp3".to_string(),
             enable_ssml: false,
             timeout_secs: 30,
+            model_path: None,
+            num_threads: None,
+            use_gpu: false,
+            quantization: None,
+            sentence_silence: None,
         }
     }
 }
@@ -150,6 +174,8 @@ pub trait TtsProvider: Send + Sync {
             TtsProviderType::Google => "Google Cloud Text-to-Speech",
             TtsProviderType::Azure => "Azure Speech Services",
             TtsProviderType::Amazon => "Amazon Polly",
+            TtsProviderType::Piper => "Piper (Local)",
+            TtsProviderType::Espeak => "eSpeak-ng (Local)",
         }
     }
 }
@@ -186,20 +212,16 @@ impl TtsEngine {
     pub fn new(config: TtsConfig) -> Self {
         let mut providers: Vec<Box<dyn TtsProvider>> = Vec::new();
 
-        // Add OpenAI provider
+        // Add cloud providers
         providers.push(Box::new(OpenAiTtsProvider::new()));
-
-        // Add ElevenLabs provider
         providers.push(Box::new(ElevenLabsTtsProvider::new()));
-
-        // Add Google provider
         providers.push(Box::new(GoogleTtsProvider::new()));
-
-        // Add Azure provider
         providers.push(Box::new(AzureTtsProvider::new()));
-
-        // Add Amazon provider
         providers.push(Box::new(AmazonTtsProvider::new()));
+
+        // Add local providers
+        providers.push(Box::new(PiperTtsProvider::new()));
+        providers.push(Box::new(EspeakTtsProvider::new()));
 
         Self {
             providers,
@@ -215,6 +237,8 @@ impl TtsEngine {
             TtsProviderType::Google => Box::new(GoogleTtsProvider::new()),
             TtsProviderType::Azure => Box::new(AzureTtsProvider::new()),
             TtsProviderType::Amazon => Box::new(AmazonTtsProvider::new()),
+            TtsProviderType::Piper => Box::new(PiperTtsProvider::new()),
+            TtsProviderType::Espeak => Box::new(EspeakTtsProvider::new()),
         };
 
         Self {

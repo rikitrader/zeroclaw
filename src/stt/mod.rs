@@ -6,11 +6,15 @@ mod azure;
 mod deepgram;
 mod google;
 mod openai;
+mod whisper_cpp;
+mod vosk;
 
 pub use azure::AzureSttProvider;
 pub use deepgram::DeepgramSttProvider;
 pub use google::GoogleSttProvider;
 pub use openai::OpenAiSttProvider;
+pub use whisper_cpp::WhisperCppProvider;
+pub use vosk::VoskProvider;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -23,10 +27,14 @@ use serde::{Deserialize, Serialize};
 /// STT provider type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SttProviderType {
+    // Cloud providers
     OpenAi,
     Google,
     Azure,
     Deepgram,
+    // Local providers
+    WhisperCpp,
+    Vosk,
 }
 
 /// STT configuration
@@ -48,6 +56,17 @@ pub struct SttConfig {
     pub sample_rate: u32,
     /// Timeout in seconds
     pub timeout_secs: u64,
+    // Local model configuration
+    /// Path to local model directory (for Whisper.cpp, Vosk)
+    pub model_path: Option<String>,
+    /// Number of threads for local inference (default: number of CPU cores)
+    pub num_threads: Option<usize>,
+    /// Use GPU acceleration if available (for Whisper.cpp)
+    pub use_gpu: bool,
+    /// Model quantization (for Whisper.cpp): "q5_0", "q5_1", "q8_0", etc.
+    pub quantization: Option<String>,
+    /// Beam size for decoding (higher = more accurate but slower)
+    pub beam_size: Option<usize>,
 }
 
 impl Default for SttConfig {
@@ -61,6 +80,11 @@ impl Default for SttConfig {
             filter_profanity: false,
             sample_rate: 16000,
             timeout_secs: 30,
+            model_path: None,
+            num_threads: None,
+            use_gpu: false,
+            quantization: None,
+            beam_size: None,
         }
     }
 }
@@ -136,6 +160,8 @@ pub trait SttProvider: Send + Sync {
             SttProviderType::Google => "Google Cloud Speech-to-Text",
             SttProviderType::Azure => "Azure Speech Services",
             SttProviderType::Deepgram => "Deepgram",
+            SttProviderType::WhisperCpp => "Whisper.cpp (Local)",
+            SttProviderType::Vosk => "Vosk (Local)",
         }
     }
 }
@@ -155,17 +181,15 @@ impl SttEngine {
     pub fn new(config: SttConfig) -> Self {
         let mut providers: Vec<Box<dyn SttProvider>> = Vec::new();
 
-        // Add OpenAI provider
+        // Add cloud providers
         providers.push(Box::new(OpenAiSttProvider::new()));
-
-        // Add Google provider
         providers.push(Box::new(GoogleSttProvider::new()));
-
-        // Add Azure provider
         providers.push(Box::new(AzureSttProvider::new()));
-
-        // Add Deepgram provider
         providers.push(Box::new(DeepgramSttProvider::new()));
+
+        // Add local providers
+        providers.push(Box::new(WhisperCppProvider::new()));
+        providers.push(Box::new(VoskProvider::new()));
 
         Self {
             providers,
@@ -180,6 +204,8 @@ impl SttEngine {
             SttProviderType::Google => Box::new(GoogleSttProvider::new()),
             SttProviderType::Azure => Box::new(AzureSttProvider::new()),
             SttProviderType::Deepgram => Box::new(DeepgramSttProvider::new()),
+            SttProviderType::WhisperCpp => Box::new(WhisperCppProvider::new()),
+            SttProviderType::Vosk => Box::new(VoskProvider::new()),
         };
 
         Self {
