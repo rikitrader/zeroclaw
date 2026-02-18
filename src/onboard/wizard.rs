@@ -2649,6 +2649,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     stream_mode: StreamMode::default(),
                     draft_update_interval_ms: 1000,
                     mention_only: false,
+                    voice: crate::config::VoiceConfig::default(),
                 });
             }
             1 => {

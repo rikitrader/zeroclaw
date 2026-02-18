@@ -604,9 +604,19 @@ pub fn all_integrations() -> Vec<IntegrationEntry> {
         },
         IntegrationEntry {
             name: "Voice",
-            description: "Voice wake + talk mode",
+            description: "STT + TTS for Telegram voice messages",
             category: IntegrationCategory::ToolsAutomation,
-            status_fn: |_| IntegrationStatus::ComingSoon,
+            status_fn: |c| {
+                if c.channels_config
+                    .telegram
+                    .as_ref()
+                    .is_some_and(|tg| tg.voice.enabled)
+                {
+                    IntegrationStatus::Active
+                } else {
+                    IntegrationStatus::Available
+                }
+            },
         },
         IntegrationEntry {
             name: "Gmail",
@@ -791,6 +801,7 @@ mod tests {
             stream_mode: StreamMode::default(),
             draft_update_interval_ms: 1000,
             mention_only: false,
+            voice: crate::config::VoiceConfig::default(),
         });
         let entries = all_integrations();
         let tg = entries.iter().find(|e| e.name == "Telegram").unwrap();

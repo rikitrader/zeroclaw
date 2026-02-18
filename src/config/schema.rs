@@ -2018,6 +2018,76 @@ fn default_draft_update_interval_ms() -> u64 {
     1000
 }
 
+fn default_voice_api_base_url() -> String {
+    "https://api.openai.com/v1".into()
+}
+
+fn default_stt_model() -> String {
+    "whisper-1".into()
+}
+
+fn default_tts_model() -> String {
+    "tts-1".into()
+}
+
+fn default_tts_voice() -> String {
+    "alloy".into()
+}
+
+fn default_respond_with_voice() -> bool {
+    true
+}
+
+fn default_max_voice_duration_secs() -> u64 {
+    120
+}
+
+/// Configuration for voice message handling (STT + TTS) on Telegram.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceConfig {
+    /// Master switch — when false, voice messages are silently ignored.
+    #[serde(default)]
+    pub enabled: bool,
+    /// OpenAI-compatible API key for Whisper/TTS endpoints.
+    pub api_key: Option<String>,
+    /// Base URL for the STT/TTS API (OpenAI-compatible).
+    #[serde(default = "default_voice_api_base_url")]
+    pub api_base_url: String,
+    /// Model used for speech-to-text transcription.
+    #[serde(default = "default_stt_model")]
+    pub stt_model: String,
+    /// Model used for text-to-speech synthesis.
+    #[serde(default = "default_tts_model")]
+    pub tts_model: String,
+    /// Voice identifier for TTS output.
+    #[serde(default = "default_tts_voice")]
+    pub tts_voice: String,
+    /// When true, send a voice reply alongside the text response.
+    #[serde(default = "default_respond_with_voice")]
+    pub respond_with_voice: bool,
+    /// ISO-639-1 language hint for Whisper (e.g. "en", "es").
+    pub language: Option<String>,
+    /// Maximum voice message duration in seconds. Longer messages are rejected.
+    #[serde(default = "default_max_voice_duration_secs")]
+    pub max_duration_secs: u64,
+}
+
+impl Default for VoiceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: None,
+            api_base_url: default_voice_api_base_url(),
+            stt_model: default_stt_model(),
+            tts_model: default_tts_model(),
+            tts_voice: default_tts_voice(),
+            respond_with_voice: default_respond_with_voice(),
+            language: None,
+            max_duration_secs: default_max_voice_duration_secs(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelegramConfig {
     pub bot_token: String,
@@ -2032,6 +2102,9 @@ pub struct TelegramConfig {
     /// Direct messages are always processed.
     #[serde(default)]
     pub mention_only: bool,
+    /// Voice message handling (STT/TTS). Disabled by default.
+    #[serde(default)]
+    pub voice: VoiceConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3228,6 +3301,7 @@ default_temperature = 0.7
                     stream_mode: StreamMode::default(),
                     draft_update_interval_ms: default_draft_update_interval_ms(),
                     mention_only: false,
+                    voice: VoiceConfig::default(),
                 }),
                 discord: None,
                 slack: None,
@@ -3541,6 +3615,7 @@ tool_dispatcher = "xml"
             stream_mode: StreamMode::Partial,
             draft_update_interval_ms: 500,
             mention_only: false,
+            voice: VoiceConfig::default(),
         };
         let json = serde_json::to_string(&tc).unwrap();
         let parsed: TelegramConfig = serde_json::from_str(&json).unwrap();
@@ -5010,5 +5085,53 @@ default_model = "legacy-model"
             mode & 0o004 != 0,
             "Test setup: file should be world-readable (mode {mode:o})"
         );
+    }
+
+    #[test]
+    fn voice_config_defaults_disabled() {
+        let v = VoiceConfig::default();
+        assert!(!v.enabled);
+        assert!(v.api_key.is_none());
+        assert_eq!(v.api_base_url, "https://api.openai.com/v1");
+        assert_eq!(v.stt_model, "whisper-1");
+        assert_eq!(v.tts_model, "tts-1");
+        assert_eq!(v.tts_voice, "alloy");
+        assert!(v.respond_with_voice);
+        assert!(v.language.is_none());
+        assert_eq!(v.max_duration_secs, 120);
+    }
+
+    #[test]
+    fn voice_config_serde_roundtrip() {
+        let original = VoiceConfig {
+            enabled: true,
+            api_key: Some("sk-test".into()),
+            api_base_url: "https://custom.api/v1".into(),
+            stt_model: "whisper-large".into(),
+            tts_model: "tts-1-hd".into(),
+            tts_voice: "nova".into(),
+            respond_with_voice: false,
+            language: Some("es".into()),
+            max_duration_secs: 60,
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: VoiceConfig = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.enabled);
+        assert_eq!(deserialized.api_key.as_deref(), Some("sk-test"));
+        assert_eq!(deserialized.tts_voice, "nova");
+        assert!(!deserialized.respond_with_voice);
+        assert_eq!(deserialized.language.as_deref(), Some("es"));
+        assert_eq!(deserialized.max_duration_secs, 60);
+    }
+
+    #[test]
+    fn telegram_config_with_voice_defaults() {
+        let toml_str = r#"
+            bot_token = "123:ABC"
+            allowed_users = ["alice"]
+        "#;
+        let tg: TelegramConfig = toml::from_str(toml_str).unwrap();
+        assert!(!tg.voice.enabled);
+        assert!(tg.voice.api_key.is_none());
     }
 }

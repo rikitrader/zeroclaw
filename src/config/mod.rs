@@ -13,7 +13,7 @@ pub use schema::{
     ReliabilityConfig, ResourceLimitsConfig, RuntimeConfig, SandboxBackend, SandboxConfig,
     SchedulerConfig, SecretsConfig, SecurityConfig, SlackConfig, StorageConfig,
     StorageProviderConfig, StorageProviderSection, StreamMode, TelegramConfig, TunnelConfig,
-    WebSearchConfig, WebhookConfig,
+    VoiceConfig, WebSearchConfig, WebhookConfig,
 };
 
 #[cfg(test)]
@@ -37,6 +37,7 @@ mod tests {
             stream_mode: StreamMode::default(),
             draft_update_interval_ms: 1000,
             mention_only: false,
+            voice: VoiceConfig::default(),
         };
 
         let discord = DiscordConfig {

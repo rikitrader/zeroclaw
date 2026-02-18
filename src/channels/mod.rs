@@ -12,6 +12,7 @@ pub mod signal;
 pub mod slack;
 pub mod telegram;
 pub mod traits;
+pub mod voice;
 pub mod whatsapp;
 
 pub use cli::CliChannel;
@@ -133,7 +134,7 @@ fn conversation_history_key(msg: &traits::ChannelMessage) -> String {
 fn channel_delivery_instructions(channel_name: &str) -> Option<&'static str> {
     match channel_name {
         "telegram" => Some(
-            "When responding on Telegram, include media markers for files or URLs that should be sent as attachments. Use one marker per attachment with this exact syntax: [IMAGE:<path-or-url>], [DOCUMENT:<path-or-url>], [VIDEO:<path-or-url>], [AUDIO:<path-or-url>], or [VOICE:<path-or-url>]. Keep normal user-facing text outside markers and never wrap markers in code fences.",
+            "When responding on Telegram, include media markers for files or URLs that should be sent as attachments. Use one marker per attachment with this exact syntax: [IMAGE:<path-or-url>], [DOCUMENT:<path-or-url>], [VIDEO:<path-or-url>], [AUDIO:<path-or-url>], or [VOICE:<path-or-url>]. Keep normal user-facing text outside markers and never wrap markers in code fences. When a user's message starts with [Voice], they sent a voice message. Keep your response concise and conversational.",
         ),
         _ => None,
     }
@@ -1312,7 +1313,8 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
                     tg.allowed_users.clone(),
                     tg.mention_only,
                 )
-                .with_streaming(tg.stream_mode, tg.draft_update_interval_ms),
+                .with_streaming(tg.stream_mode, tg.draft_update_interval_ms)
+                .with_voice(tg.voice.clone()),
             ),
         ));
     }
@@ -1640,7 +1642,8 @@ pub async fn start_channels(config: Config) -> Result<()> {
                 tg.allowed_users.clone(),
                 tg.mention_only,
             )
-            .with_streaming(tg.stream_mode, tg.draft_update_interval_ms),
+            .with_streaming(tg.stream_mode, tg.draft_update_interval_ms)
+            .with_voice(tg.voice.clone()),
         ));
     }
 

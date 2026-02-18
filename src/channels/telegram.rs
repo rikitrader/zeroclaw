@@ -1,11 +1,12 @@
 use super::traits::{Channel, ChannelMessage, SendMessage};
-use crate::config::{Config, StreamMode};
+use crate::config::{Config, StreamMode, VoiceConfig};
 use crate::security::pairing::PairingGuard;
 use anyhow::Context;
 use async_trait::async_trait;
 use directories::UserDirs;
 use parking_lot::Mutex;
 use reqwest::multipart::{Form, Part};
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -307,6 +308,9 @@ pub struct TelegramChannel {
     last_draft_edit: Mutex<std::collections::HashMap<String, std::time::Instant>>,
     mention_only: bool,
     bot_username: Mutex<Option<String>>,
+    voice_config: VoiceConfig,
+    /// Chat IDs that sent a voice message and expect a voice reply.
+    voice_reply_pending: Mutex<HashSet<String>>,
 }
 
 impl TelegramChannel {
@@ -334,6 +338,8 @@ impl TelegramChannel {
             typing_handle: Mutex::new(None),
             mention_only,
             bot_username: Mutex::new(None),
+            voice_config: VoiceConfig::default(),
+            voice_reply_pending: Mutex::new(HashSet::new()),
         }
     }
 
@@ -345,6 +351,17 @@ impl TelegramChannel {
     ) -> Self {
         self.stream_mode = stream_mode;
         self.draft_update_interval_ms = draft_update_interval_ms;
+        self
+    }
+
+    /// Configure voice message handling (STT/TTS).
+    pub fn with_voice(mut self, voice_config: VoiceConfig) -> Self {
+        if voice_config.enabled && voice_config.api_key.is_none() {
+            tracing::warn!(
+                "Telegram voice is enabled but no api_key configured — voice messages will be ignored"
+            );
+        }
+        self.voice_config = voice_config;
         self
     }
 
@@ -828,6 +845,137 @@ Allowlist Telegram username (without '@') or numeric user ID.",
         })
     }
 
+    /// Attempt to transcribe an incoming voice message.
+    ///
+    /// Returns `Some(ChannelMessage)` with `[Voice] <transcription>` content on success,
+    /// or `None` if voice is disabled, the update has no voice, or transcription fails.
+    async fn try_transcribe_voice_message(
+        &self,
+        update: &serde_json::Value,
+    ) -> Option<ChannelMessage> {
+        // Gate: voice must be enabled with an API key
+        if !self.voice_config.enabled {
+            return None;
+        }
+        let api_key = self.voice_config.api_key.as_deref()?;
+
+        let message = update.get("message")?;
+
+        // Accept `voice` or `audio` fields
+        let voice_obj = message.get("voice").or_else(|| message.get("audio"))?;
+
+        let file_id = voice_obj
+            .get("file_id")
+            .and_then(serde_json::Value::as_str)?;
+
+        // Check duration limit
+        let duration = voice_obj
+            .get("duration")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        if duration > self.voice_config.max_duration_secs {
+            tracing::warn!(
+                "Voice message too long ({duration}s > {}s limit), ignoring",
+                self.voice_config.max_duration_secs
+            );
+            return None;
+        }
+
+        // Extract sender identity (same logic as parse_update_message)
+        let username = message
+            .get("from")
+            .and_then(|from| from.get("username"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+
+        let user_id = message
+            .get("from")
+            .and_then(|from| from.get("id"))
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string());
+
+        let sender_identity = if username == "unknown" {
+            user_id.clone().unwrap_or_else(|| "unknown".to_string())
+        } else {
+            username.clone()
+        };
+
+        // Allowlist check
+        let mut identities = vec![username.as_str()];
+        if let Some(id) = user_id.as_deref() {
+            identities.push(id);
+        }
+        if !self.is_any_user_allowed(identities.iter().copied()) {
+            return None;
+        }
+
+        let chat_id = message
+            .get("chat")
+            .and_then(|chat| chat.get("id"))
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string())?;
+
+        let message_id = message
+            .get("message_id")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+
+        let thread_id = message
+            .get("message_thread_id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string());
+
+        let reply_target = if let Some(ref tid) = thread_id {
+            format!("{}:{}", chat_id, tid)
+        } else {
+            chat_id.clone()
+        };
+
+        // Download and transcribe
+        let audio_bytes = match self.download_telegram_file(file_id).await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("Failed to download voice file: {e}");
+                return None;
+            }
+        };
+
+        let transcription = match super::voice::transcribe_audio(
+            &self.http_client(),
+            api_key,
+            &self.voice_config.api_base_url,
+            audio_bytes,
+            &self.voice_config.stt_model,
+            self.voice_config.language.as_deref(),
+        )
+        .await
+        {
+            Ok(text) => text,
+            Err(e) => {
+                tracing::warn!("Voice transcription failed: {e}");
+                return None;
+            }
+        };
+
+        tracing::info!(
+            "Transcribed voice from {sender_identity}: {} chars",
+            transcription.len()
+        );
+
+        Some(ChannelMessage {
+            id: format!("telegram_{chat_id}_{message_id}"),
+            sender: sender_identity,
+            reply_target,
+            content: format!("[Voice] {transcription}"),
+            channel: "telegram".to_string(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        })
+    }
+
     async fn send_text_chunks(
         &self,
         message: &str,
@@ -1085,6 +1233,138 @@ Allowlist Telegram username (without '@') or numeric user ID.",
 
         tracing::info!("Telegram document sent to {chat_id}: {file_name}");
         Ok(())
+    }
+
+    /// Download a file from Telegram by its `file_id`.
+    ///
+    /// Two-step process: `getFile` to obtain the `file_path`, then fetch the bytes.
+    pub async fn download_telegram_file(&self, file_id: &str) -> anyhow::Result<Vec<u8>> {
+        // Step 1: resolve file_id → file_path
+        let get_file_url = self.api_url("getFile");
+        let body = serde_json::json!({ "file_id": file_id });
+        let resp = self
+            .http_client()
+            .post(&get_file_url)
+            .json(&body)
+            .send()
+            .await
+            .context("Telegram getFile request failed")?;
+
+        if !resp.status().is_success() {
+            let err = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Telegram getFile failed: {err}");
+        }
+
+        let data: serde_json::Value = resp.json().await?;
+        let file_path = data
+            .get("result")
+            .and_then(|r| r.get("file_path"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("Telegram getFile: missing file_path in response"))?;
+
+        // Step 2: download the actual file bytes
+        let download_url = format!(
+            "https://api.telegram.org/file/bot{}/{}",
+            self.bot_token, file_path
+        );
+        let file_resp = self
+            .http_client()
+            .get(&download_url)
+            .send()
+            .await
+            .context("Telegram file download failed")?;
+
+        if !file_resp.status().is_success() {
+            let err = file_resp.text().await.unwrap_or_default();
+            anyhow::bail!("Telegram file download failed: {err}");
+        }
+
+        let bytes = file_resp.bytes().await?.to_vec();
+        tracing::debug!("Downloaded Telegram file {file_id} ({} bytes)", bytes.len());
+        Ok(bytes)
+    }
+
+    /// Send an Opus voice message to a Telegram chat.
+    pub async fn send_voice_bytes(
+        &self,
+        chat_id: &str,
+        thread_id: Option<&str>,
+        voice_bytes: Vec<u8>,
+        caption: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let part = Part::bytes(voice_bytes)
+            .file_name("voice.ogg")
+            .mime_str("audio/ogg")?;
+
+        let mut form = Form::new()
+            .text("chat_id", chat_id.to_string())
+            .part("voice", part);
+
+        if let Some(tid) = thread_id {
+            form = form.text("message_thread_id", tid.to_string());
+        }
+
+        if let Some(cap) = caption {
+            form = form.text("caption", cap.to_string());
+        }
+
+        let resp = self
+            .http_client()
+            .post(self.api_url("sendVoice"))
+            .multipart(form)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err = resp.text().await?;
+            anyhow::bail!("Telegram sendVoice failed: {err}");
+        }
+
+        tracing::info!("Telegram voice message sent to {chat_id}");
+        Ok(())
+    }
+
+    /// If the chat has a pending voice reply flag, synthesize and send a voice message.
+    async fn maybe_send_voice_reply(&self, chat_id: &str, thread_id: Option<&str>, text: &str) {
+        let should_reply = self.voice_reply_pending.lock().remove(chat_id);
+
+        if !should_reply {
+            return;
+        }
+
+        let Some(api_key) = self.voice_config.api_key.as_deref() else {
+            return;
+        };
+
+        // Truncate very long responses for TTS (4096 chars is OpenAI's limit)
+        let tts_text = if text.len() > 4096 {
+            &text[..4096]
+        } else {
+            text
+        };
+
+        match super::voice::synthesize_speech(
+            &self.http_client(),
+            api_key,
+            &self.voice_config.api_base_url,
+            tts_text,
+            &self.voice_config.tts_model,
+            &self.voice_config.tts_voice,
+        )
+        .await
+        {
+            Ok(audio_bytes) => {
+                if let Err(e) = self
+                    .send_voice_bytes(chat_id, thread_id, audio_bytes, None)
+                    .await
+                {
+                    tracing::warn!("Failed to send TTS voice reply: {e}");
+                }
+            }
+            Err(e) => {
+                tracing::warn!("TTS synthesis failed: {e}");
+            }
+        }
     }
 
     /// Send a photo to a Telegram chat
@@ -1662,7 +1942,13 @@ impl Channel for TelegramChannel {
             return Ok(());
         }
 
-        self.send_text_chunks(&content, chat_id, thread_id).await
+        self.send_text_chunks(&content, chat_id, thread_id).await?;
+
+        // TTS: if the original message was voice and respond_with_voice is on, send audio reply
+        self.maybe_send_voice_reply(chat_id, thread_id, &content)
+            .await;
+
+        Ok(())
     }
 
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
@@ -1744,7 +2030,17 @@ Ensure only one `zeroclaw` process is using this bot token."
                         offset = uid + 1;
                     }
 
-                    let Some(msg) = self.parse_update_message(update) else {
+                    let msg = if let Some(text_msg) = self.parse_update_message(update) {
+                        text_msg
+                    } else if let Some(voice_msg) = self.try_transcribe_voice_message(update).await
+                    {
+                        // Track that this chat expects a voice reply
+                        if self.voice_config.respond_with_voice {
+                            let (chat_id, _) = Self::parse_reply_target(&voice_msg.reply_target);
+                            self.voice_reply_pending.lock().insert(chat_id);
+                        }
+                        voice_msg
+                    } else {
                         self.handle_unauthorized_message(update).await;
                         continue;
                     };
@@ -2930,8 +3226,7 @@ mod tests {
 
     #[test]
     fn parse_attachment_markers_mixed_with_voice() {
-        let message =
-            "Files: [IMAGE:/tmp/a.png] and [VOICE:/tmp/b.ogg] and [DOCUMENT:/tmp/c.pdf]";
+        let message = "Files: [IMAGE:/tmp/a.png] and [VOICE:/tmp/b.ogg] and [DOCUMENT:/tmp/c.pdf]";
         let (cleaned, attachments) = parse_attachment_markers(message);
 
         assert_eq!(cleaned, "Files:  and  and");
@@ -2971,7 +3266,12 @@ mod tests {
         let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
 
         let result = ch
-            .send_voice_by_url("123456", None, "https://example.com/voice.ogg", Some("Voice memo"))
+            .send_voice_by_url(
+                "123456",
+                None,
+                "https://example.com/voice.ogg",
+                Some("Voice memo"),
+            )
             .await;
 
         assert!(result.is_err());
@@ -2993,7 +3293,9 @@ mod tests {
         let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
         let dir = tempfile::tempdir().unwrap();
         let voice_path = dir.path().join("voice.ogg");
-        tokio::fs::write(&voice_path, b"fake-ogg-bytes").await.unwrap();
+        tokio::fs::write(&voice_path, b"fake-ogg-bytes")
+            .await
+            .unwrap();
 
         let result = ch
             .send_voice("123456", None, &voice_path, Some("Voice note"))
@@ -3013,7 +3315,9 @@ mod tests {
         let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
         let dir = tempfile::tempdir().unwrap();
         let voice_path = dir.path().join("voice.ogg");
-        tokio::fs::write(&voice_path, b"fake-ogg-bytes").await.unwrap();
+        tokio::fs::write(&voice_path, b"fake-ogg-bytes")
+            .await
+            .unwrap();
 
         let result = ch.send_voice("123456", None, &voice_path, None).await;
 

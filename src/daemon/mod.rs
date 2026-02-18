@@ -299,6 +299,7 @@ mod tests {
             stream_mode: crate::config::StreamMode::default(),
             draft_update_interval_ms: 1000,
             mention_only: false,
+            voice: crate::config::VoiceConfig::default(),
         });
         assert!(has_supervised_channels(&config));
     }
