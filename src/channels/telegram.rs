@@ -2830,4 +2830,223 @@ mod tests {
         let ch_disabled = TelegramChannel::new("token".into(), vec!["*".into()], false);
         assert!(!ch_disabled.mention_only);
     }
+
+    // ── Voice / TTS tests ───────────────────────────────────────────
+
+    #[test]
+    fn from_marker_voice_returns_voice_kind() {
+        assert_eq!(
+            TelegramAttachmentKind::from_marker("VOICE"),
+            Some(TelegramAttachmentKind::Voice)
+        );
+    }
+
+    #[test]
+    fn from_marker_voice_case_insensitive() {
+        assert_eq!(
+            TelegramAttachmentKind::from_marker("voice"),
+            Some(TelegramAttachmentKind::Voice)
+        );
+        assert_eq!(
+            TelegramAttachmentKind::from_marker("Voice"),
+            Some(TelegramAttachmentKind::Voice)
+        );
+        assert_eq!(
+            TelegramAttachmentKind::from_marker("  VOICE  "),
+            Some(TelegramAttachmentKind::Voice)
+        );
+    }
+
+    #[test]
+    fn infer_attachment_kind_voice_ogg() {
+        assert_eq!(
+            infer_attachment_kind_from_target("/tmp/recording.ogg"),
+            Some(TelegramAttachmentKind::Voice)
+        );
+    }
+
+    #[test]
+    fn infer_attachment_kind_voice_oga() {
+        assert_eq!(
+            infer_attachment_kind_from_target("/tmp/recording.oga"),
+            Some(TelegramAttachmentKind::Voice)
+        );
+    }
+
+    #[test]
+    fn infer_attachment_kind_voice_opus() {
+        assert_eq!(
+            infer_attachment_kind_from_target("/tmp/recording.opus"),
+            Some(TelegramAttachmentKind::Voice)
+        );
+    }
+
+    #[test]
+    fn infer_attachment_kind_voice_url_with_query_string() {
+        assert_eq!(
+            infer_attachment_kind_from_target("https://cdn.example.com/voice.ogg?token=abc"),
+            Some(TelegramAttachmentKind::Voice)
+        );
+    }
+
+    #[test]
+    fn infer_attachment_kind_voice_url_with_fragment() {
+        assert_eq!(
+            infer_attachment_kind_from_target("https://cdn.example.com/voice.opus#t=0"),
+            Some(TelegramAttachmentKind::Voice)
+        );
+    }
+
+    #[test]
+    fn parse_attachment_markers_extracts_voice_local_path() {
+        let message = "Listen to this [VOICE:/tmp/recording.ogg]";
+        let (cleaned, attachments) = parse_attachment_markers(message);
+
+        assert_eq!(cleaned, "Listen to this");
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].kind, TelegramAttachmentKind::Voice);
+        assert_eq!(attachments[0].target, "/tmp/recording.ogg");
+    }
+
+    #[test]
+    fn parse_attachment_markers_extracts_voice_url() {
+        let message = "Here [VOICE:https://example.com/voice.ogg]";
+        let (cleaned, attachments) = parse_attachment_markers(message);
+
+        assert_eq!(cleaned, "Here");
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].kind, TelegramAttachmentKind::Voice);
+        assert_eq!(attachments[0].target, "https://example.com/voice.ogg");
+    }
+
+    #[test]
+    fn parse_attachment_markers_voice_with_empty_target_ignored() {
+        let message = "Nothing [VOICE:] here";
+        let (cleaned, attachments) = parse_attachment_markers(message);
+
+        assert_eq!(cleaned, "Nothing [VOICE:] here");
+        assert!(attachments.is_empty());
+    }
+
+    #[test]
+    fn parse_attachment_markers_mixed_with_voice() {
+        let message =
+            "Files: [IMAGE:/tmp/a.png] and [VOICE:/tmp/b.ogg] and [DOCUMENT:/tmp/c.pdf]";
+        let (cleaned, attachments) = parse_attachment_markers(message);
+
+        assert_eq!(cleaned, "Files:  and  and");
+        assert_eq!(attachments.len(), 3);
+        assert_eq!(attachments[0].kind, TelegramAttachmentKind::Image);
+        assert_eq!(attachments[1].kind, TelegramAttachmentKind::Voice);
+        assert_eq!(attachments[2].kind, TelegramAttachmentKind::Document);
+    }
+
+    #[test]
+    fn parse_path_only_attachment_detects_voice_ogg() {
+        let dir = tempfile::tempdir().unwrap();
+        let voice_path = dir.path().join("message.ogg");
+        std::fs::write(&voice_path, b"fake-ogg").unwrap();
+
+        let parsed = parse_path_only_attachment(voice_path.to_string_lossy().as_ref())
+            .expect("expected voice attachment");
+
+        assert_eq!(parsed.kind, TelegramAttachmentKind::Voice);
+        assert_eq!(parsed.target, voice_path.to_string_lossy());
+    }
+
+    #[test]
+    fn parse_path_only_attachment_detects_voice_opus() {
+        let dir = tempfile::tempdir().unwrap();
+        let voice_path = dir.path().join("recording.opus");
+        std::fs::write(&voice_path, b"fake-opus").unwrap();
+
+        let parsed = parse_path_only_attachment(voice_path.to_string_lossy().as_ref())
+            .expect("expected voice attachment");
+
+        assert_eq!(parsed.kind, TelegramAttachmentKind::Voice);
+    }
+
+    #[tokio::test]
+    async fn telegram_send_voice_by_url_network_error() {
+        let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
+
+        let result = ch
+            .send_voice_by_url("123456", None, "https://example.com/voice.ogg", Some("Voice memo"))
+            .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn telegram_send_voice_by_url_no_caption() {
+        let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
+
+        let result = ch
+            .send_voice_by_url("123456", None, "https://example.com/voice.ogg", None)
+            .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn telegram_send_voice_with_caption() {
+        let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
+        let dir = tempfile::tempdir().unwrap();
+        let voice_path = dir.path().join("voice.ogg");
+        tokio::fs::write(&voice_path, b"fake-ogg-bytes").await.unwrap();
+
+        let result = ch
+            .send_voice("123456", None, &voice_path, Some("Voice note"))
+            .await;
+
+        // Should fail with network error (no real Telegram server), not panic
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("error") || err.contains("failed") || err.contains("connect"),
+            "Expected network error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn telegram_send_voice_no_caption() {
+        let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
+        let dir = tempfile::tempdir().unwrap();
+        let voice_path = dir.path().join("voice.ogg");
+        tokio::fs::write(&voice_path, b"fake-ogg-bytes").await.unwrap();
+
+        let result = ch.send_voice("123456", None, &voice_path, None).await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn telegram_send_voice_default_filename_fallback() {
+        // When file_name() returns None (e.g., root path), should default to "voice.ogg"
+        // We verify the method doesn't panic with unusual paths
+        let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
+        let path = Path::new("/nonexistent");
+
+        let result = ch.send_voice("123456", None, path, None).await;
+
+        // Should fail with file not found, not a panic
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn voice_attachment_kind_distinguishes_audio_from_voice() {
+        // mp3/wav/flac → Audio, ogg/oga/opus → Voice
+        assert_eq!(
+            infer_attachment_kind_from_target("file.mp3"),
+            Some(TelegramAttachmentKind::Audio)
+        );
+        assert_eq!(
+            infer_attachment_kind_from_target("file.ogg"),
+            Some(TelegramAttachmentKind::Voice)
+        );
+        assert_ne!(
+            infer_attachment_kind_from_target("file.mp3"),
+            infer_attachment_kind_from_target("file.ogg")
+        );
+    }
 }

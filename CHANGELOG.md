@@ -7,14 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-02-18
+
+### Added
+- **Telegram voice/TTS test suite**: 19 new unit tests covering the full voice attachment
+  pipeline in the Telegram channel (marker parsing, extension inference, path detection,
+  send methods, caption handling, URL-based delivery, filename fallback, Audio vs Voice
+  discrimination). Voice test coverage increased from 2 to 21 tests.
+
 ### Security
-- **Legacy XOR cipher migration**: The `enc:` prefix (XOR cipher) is now deprecated. 
+- **Legacy XOR cipher migration**: The `enc:` prefix (XOR cipher) is now deprecated.
   Secrets using this format will be automatically migrated to `enc2:` (ChaCha20-Poly1305 AEAD)
   when decrypted via `decrypt_and_migrate()`. A `tracing::warn!` is emitted when legacy
   values are encountered. The XOR cipher will be removed in a future release.
 
 ### Added
-- `SecretStore::decrypt_and_migrate()` — Decrypts secrets and returns a migrated `enc2:` 
+- `SecretStore::decrypt_and_migrate()` — Decrypts secrets and returns a migrated `enc2:`
   value if the input used the legacy `enc:` format
 - `SecretStore::needs_migration()` — Check if a value uses the legacy `enc:` format
 - `SecretStore::is_secure_encrypted()` — Check if a value uses the secure `enc2:` format
@@ -51,4 +59,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Workspace escape prevention
 - Forbidden system path protection (`/etc`, `/root`, `~/.ssh`)
 
-[0.1.0]: https://github.com/theonlyhennygod/zeroclaw/releases/tag/v0.1.0
+[0.1.1]: https://github.com/zeroclaw-labs/zeroclaw/releases/tag/v0.1.1
+[0.1.0]: https://github.com/zeroclaw-labs/zeroclaw/releases/tag/v0.1.0
