@@ -919,51 +919,79 @@ async fn handle_whatsapp_message(
         return (StatusCode::OK, Json(serde_json::json!({"status": "ok"})));
     }
 
-    // Process each message
-    for msg in &messages {
-        tracing::info!(
-            "WhatsApp message from {}: {}",
-            msg.sender,
-            truncate_with_ellipsis(&msg.content, 50)
-        );
-
-        // Auto-save to memory
-        if state.auto_save {
-            let key = whatsapp_memory_key(msg);
-            let _ = state
-                .mem
-                .store(&key, &msg.content, MemoryCategory::Conversation, None)
-                .await;
-        }
-
-        // Call the LLM
-        match state
-            .provider
-            .simple_chat(&msg.content, &state.model, state.temperature)
-            .await
-        {
-            Ok(response) => {
-                // Send reply via WhatsApp
-                if let Err(e) = wa
-                    .send(&SendMessage::new(response, &msg.reply_target))
-                    .await
-                {
-                    tracing::error!("Failed to send WhatsApp reply: {e}");
-                }
+    // Deduplicate using idempotency store to prevent Meta webhook retries
+    // from causing double messages. Each WhatsApp message has a unique wamid.
+    let new_messages: Vec<_> = messages
+        .into_iter()
+        .filter(|msg| {
+            let idempotency_key = format!("wa_{}", msg.id);
+            if state.idempotency_store.record_if_new(&idempotency_key) {
+                true
+            } else {
+                tracing::debug!(
+                    "WhatsApp: skipping duplicate message {} from {}",
+                    msg.id,
+                    msg.sender
+                );
+                false
             }
-            Err(e) => {
-                tracing::error!("LLM error for WhatsApp message: {e:#}");
-                let _ = wa
-                    .send(&SendMessage::new(
-                        "Sorry, I couldn't process your message right now.",
-                        &msg.reply_target,
-                    ))
-                    .await;
-            }
-        }
+        })
+        .collect();
+
+    if new_messages.is_empty() {
+        return (StatusCode::OK, Json(serde_json::json!({"status": "ok"})));
     }
 
-    // Acknowledge the webhook
+    // Spawn processing as background task so we return 200 OK immediately.
+    // Meta retries webhooks if 200 isn't received within ~20 seconds.
+    let wa = Arc::clone(wa);
+    let state = state.clone();
+    tokio::spawn(async move {
+        for msg in &new_messages {
+            tracing::info!(
+                "WhatsApp message from {}: {}",
+                msg.sender,
+                truncate_with_ellipsis(&msg.content, 50)
+            );
+
+            // Auto-save to memory
+            if state.auto_save {
+                let key = whatsapp_memory_key(msg);
+                let _ = state
+                    .mem
+                    .store(&key, &msg.content, MemoryCategory::Conversation, None)
+                    .await;
+            }
+
+            // Call the LLM
+            match state
+                .provider
+                .simple_chat(&msg.content, &state.model, state.temperature)
+                .await
+            {
+                Ok(response) => {
+                    // Send reply via WhatsApp
+                    if let Err(e) = wa
+                        .send(&SendMessage::new(response, &msg.reply_target))
+                        .await
+                    {
+                        tracing::error!("Failed to send WhatsApp reply: {e}");
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("LLM error for WhatsApp message: {e:#}");
+                    let _ = wa
+                        .send(&SendMessage::new(
+                            "Sorry, I couldn't process your message right now.",
+                            &msg.reply_target,
+                        ))
+                        .await;
+                }
+            }
+        }
+    });
+
+    // Acknowledge webhook immediately — processing continues in background
     (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
 }
 

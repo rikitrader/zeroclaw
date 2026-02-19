@@ -136,6 +136,9 @@ fn channel_delivery_instructions(channel_name: &str) -> Option<&'static str> {
         "telegram" => Some(
             "When responding on Telegram, include media markers for files or URLs that should be sent as attachments. Use one marker per attachment with this exact syntax: [IMAGE:<path-or-url>], [DOCUMENT:<path-or-url>], [VIDEO:<path-or-url>], [AUDIO:<path-or-url>], or [VOICE:<path-or-url>]. Keep normal user-facing text outside markers and never wrap markers in code fences. When a user's message starts with [Voice], they sent a voice message. Keep your response concise and conversational.",
         ),
+        "whatsapp" => Some(
+            "When responding on WhatsApp, include media markers for images or files that should be sent as attachments. Use one marker per attachment with this exact syntax: [IMAGE:<url>], [DOCUMENT:<url>], [VIDEO:<url>], or [AUDIO:<url>]. The first image marker will be sent as a captioned image (your text becomes the caption). Keep normal user-facing text outside markers and never wrap markers in code fences. Keep your response concise and conversational.",
+        ),
         _ => None,
     }
 }

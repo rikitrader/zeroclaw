@@ -2,6 +2,75 @@ use super::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
 use uuid::Uuid;
 
+/// Supported WhatsApp media attachment kinds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WhatsAppAttachmentKind {
+    Image,
+    Document,
+    Video,
+    Audio,
+}
+
+#[derive(Debug, Clone)]
+struct WhatsAppAttachment {
+    kind: WhatsAppAttachmentKind,
+    target: String,
+}
+
+/// Parse `[IMAGE:<url>]`, `[DOCUMENT:<url>]`, `[VIDEO:<url>]`, `[AUDIO:<url>]`
+/// markers from the LLM response. Returns cleaned text and extracted attachments.
+fn parse_wa_attachment_markers(message: &str) -> (String, Vec<WhatsAppAttachment>) {
+    let mut cleaned = String::with_capacity(message.len());
+    let mut attachments = Vec::new();
+    let mut cursor = 0;
+
+    while cursor < message.len() {
+        let Some(open_rel) = message[cursor..].find('[') else {
+            cleaned.push_str(&message[cursor..]);
+            break;
+        };
+
+        let open = cursor + open_rel;
+        cleaned.push_str(&message[cursor..open]);
+
+        let Some(close_rel) = message[open..].find(']') else {
+            cleaned.push_str(&message[open..]);
+            break;
+        };
+
+        let close = open + close_rel;
+        let marker = &message[open + 1..close];
+
+        let parsed = marker.split_once(':').and_then(|(kind, target)| {
+            let kind = match kind {
+                "IMAGE" => WhatsAppAttachmentKind::Image,
+                "DOCUMENT" => WhatsAppAttachmentKind::Document,
+                "VIDEO" => WhatsAppAttachmentKind::Video,
+                "AUDIO" => WhatsAppAttachmentKind::Audio,
+                _ => return None,
+            };
+            let target = target.trim();
+            if target.is_empty() {
+                return None;
+            }
+            Some(WhatsAppAttachment {
+                kind,
+                target: target.to_string(),
+            })
+        });
+
+        if let Some(attachment) = parsed {
+            attachments.push(attachment);
+        } else {
+            cleaned.push_str(&message[open..=close]);
+        }
+
+        cursor = close + 1;
+    }
+
+    (cleaned.trim().to_string(), attachments)
+}
+
 /// `WhatsApp` channel — uses `WhatsApp` Business Cloud API
 ///
 /// This channel operates in webhook mode (push-based) rather than polling.
@@ -42,6 +111,93 @@ impl WhatsAppChannel {
     /// Get the verify token for webhook verification
     pub fn verify_token(&self) -> &str {
         &self.verify_token
+    }
+
+    /// WhatsApp Cloud API base URL for this phone number
+    fn api_url(&self) -> String {
+        format!(
+            "https://graph.facebook.com/v18.0/{}/messages",
+            self.endpoint_id
+        )
+    }
+
+    /// Normalize recipient: remove leading + for WhatsApp API
+    fn normalize_recipient(recipient: &str) -> &str {
+        recipient.strip_prefix('+').unwrap_or(recipient)
+    }
+
+    /// Send a plain text message
+    async fn send_text(&self, recipient: &str, text: &str) -> anyhow::Result<()> {
+        let to = Self::normalize_recipient(recipient);
+
+        let body = serde_json::json!({
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to,
+            "type": "text",
+            "text": {
+                "preview_url": false,
+                "body": text
+            }
+        });
+
+        self.post_message(&body).await
+    }
+
+    /// Send a media attachment, optionally with a caption
+    async fn send_media(
+        &self,
+        recipient: &str,
+        attachment: &WhatsAppAttachment,
+        caption: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let to = Self::normalize_recipient(recipient);
+
+        let (msg_type, media_key) = match attachment.kind {
+            WhatsAppAttachmentKind::Image => ("image", "image"),
+            WhatsAppAttachmentKind::Document => ("document", "document"),
+            WhatsAppAttachmentKind::Video => ("video", "video"),
+            WhatsAppAttachmentKind::Audio => ("audio", "audio"),
+        };
+
+        let mut media_obj = serde_json::json!({
+            "link": attachment.target
+        });
+
+        if let Some(caption) = caption {
+            media_obj["caption"] = serde_json::Value::String(caption.to_string());
+        }
+
+        let body = serde_json::json!({
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to,
+            "type": msg_type,
+            media_key: media_obj
+        });
+
+        self.post_message(&body).await
+    }
+
+    /// POST a message payload to the WhatsApp Cloud API
+    async fn post_message(&self, body: &serde_json::Value) -> anyhow::Result<()> {
+        let resp = self
+            .http_client()
+            .post(self.api_url())
+            .bearer_auth(&self.access_token)
+            .header("Content-Type", "application/json")
+            .json(body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            tracing::error!("WhatsApp send failed: {status} — {error_body}");
+            anyhow::bail!("WhatsApp API error: {status}");
+        }
+
+        Ok(())
     }
 
     /// Parse an incoming webhook payload from Meta and extract messages
@@ -119,8 +275,15 @@ impl WhatsAppChannel {
                                 .as_secs()
                         });
 
+                    // Use WhatsApp's native message ID (wamid.*) for idempotency
+                    let msg_id = msg
+                        .get("id")
+                        .and_then(|id| id.as_str())
+                        .map(String::from)
+                        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
                     messages.push(ChannelMessage {
-                        id: Uuid::new_v4().to_string(),
+                        id: msg_id,
                         reply_target: normalized_from.clone(),
                         sender: normalized_from,
                         content,
@@ -142,43 +305,39 @@ impl Channel for WhatsAppChannel {
     }
 
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        // WhatsApp Cloud API: POST to /v18.0/{phone_number_id}/messages
-        let url = format!(
-            "https://graph.facebook.com/v18.0/{}/messages",
-            self.endpoint_id
-        );
+        let (text, attachments) = parse_wa_attachment_markers(&message.content);
 
-        // Normalize recipient (remove leading + if present for API)
-        let to = message
-            .recipient
-            .strip_prefix('+')
-            .unwrap_or(&message.recipient);
+        // If we have attachments, send them (first image gets caption, rest standalone)
+        if !attachments.is_empty() {
+            let mut caption_sent = false;
 
-        let body = serde_json::json!({
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": to,
-            "type": "text",
-            "text": {
-                "preview_url": false,
-                "body": message.content
+            for attachment in &attachments {
+                // First image attachment gets the text as caption
+                let caption = if !caption_sent
+                    && !text.is_empty()
+                    && attachment.kind == WhatsAppAttachmentKind::Image
+                {
+                    caption_sent = true;
+                    Some(text.as_str())
+                } else {
+                    None
+                };
+
+                self.send_media(&message.recipient, attachment, caption)
+                    .await?;
             }
-        });
 
-        let resp = self
-            .http_client()
-            .post(&url)
-            .bearer_auth(&self.access_token)
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+            // If text wasn't used as caption, send it separately
+            if !caption_sent && !text.is_empty() {
+                self.send_text(&message.recipient, &text).await?;
+            }
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let error_body = resp.text().await.unwrap_or_default();
-            tracing::error!("WhatsApp send failed: {status} — {error_body}");
-            anyhow::bail!("WhatsApp API error: {status}");
+            return Ok(());
+        }
+
+        // No attachments — send as plain text
+        if !text.is_empty() {
+            self.send_text(&message.recipient, &text).await?;
         }
 
         Ok(())
@@ -1112,5 +1271,111 @@ mod tests {
             msgs[0].content,
             "<script>alert('xss')</script> & \"quotes\" 'apostrophe'"
         );
+    }
+
+    // ── parse_wa_attachment_markers tests ──
+
+    #[test]
+    fn wa_marker_text_only() {
+        let (text, attachments) = parse_wa_attachment_markers("Hello world");
+        assert_eq!(text, "Hello world");
+        assert!(attachments.is_empty());
+    }
+
+    #[test]
+    fn wa_marker_single_image() {
+        let (text, attachments) =
+            parse_wa_attachment_markers("Check this out [IMAGE:https://example.com/photo.jpg]");
+        assert_eq!(text, "Check this out");
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].kind, WhatsAppAttachmentKind::Image);
+        assert_eq!(attachments[0].target, "https://example.com/photo.jpg");
+    }
+
+    #[test]
+    fn wa_marker_all_types() {
+        let msg = "[IMAGE:https://img.png] [DOCUMENT:https://doc.pdf] [VIDEO:https://vid.mp4] [AUDIO:https://aud.ogg]";
+        let (text, attachments) = parse_wa_attachment_markers(msg);
+        assert_eq!(text, "");
+        assert_eq!(attachments.len(), 4);
+        assert_eq!(attachments[0].kind, WhatsAppAttachmentKind::Image);
+        assert_eq!(attachments[1].kind, WhatsAppAttachmentKind::Document);
+        assert_eq!(attachments[2].kind, WhatsAppAttachmentKind::Video);
+        assert_eq!(attachments[3].kind, WhatsAppAttachmentKind::Audio);
+    }
+
+    #[test]
+    fn wa_marker_mixed_text_and_attachments() {
+        let msg = "Here is a photo [IMAGE:https://img.png] and a document [DOCUMENT:https://doc.pdf] enjoy!";
+        let (text, attachments) = parse_wa_attachment_markers(msg);
+        assert_eq!(text, "Here is a photo  and a document  enjoy!");
+        assert_eq!(attachments.len(), 2);
+    }
+
+    #[test]
+    fn wa_marker_unknown_type_preserved() {
+        let (text, attachments) = parse_wa_attachment_markers("See [STICKER:https://s.webp] here");
+        assert_eq!(text, "See [STICKER:https://s.webp] here");
+        assert!(attachments.is_empty());
+    }
+
+    #[test]
+    fn wa_marker_empty_target_ignored() {
+        let (text, attachments) = parse_wa_attachment_markers("Empty [IMAGE:] here");
+        assert_eq!(text, "Empty [IMAGE:] here");
+        assert!(attachments.is_empty());
+    }
+
+    #[test]
+    fn wa_marker_whitespace_only_target_ignored() {
+        let (text, attachments) = parse_wa_attachment_markers("Blank [IMAGE:   ] here");
+        assert_eq!(text, "Blank [IMAGE:   ] here");
+        assert!(attachments.is_empty());
+    }
+
+    #[test]
+    fn wa_marker_no_colon_preserved() {
+        let (text, attachments) = parse_wa_attachment_markers("Normal [brackets] here");
+        assert_eq!(text, "Normal [brackets] here");
+        assert!(attachments.is_empty());
+    }
+
+    #[test]
+    fn wa_marker_unclosed_bracket_preserved() {
+        let (text, attachments) = parse_wa_attachment_markers("Broken [IMAGE:https://img.png");
+        assert_eq!(text, "Broken [IMAGE:https://img.png");
+        assert!(attachments.is_empty());
+    }
+
+    #[test]
+    fn wa_marker_empty_input() {
+        let (text, attachments) = parse_wa_attachment_markers("");
+        assert_eq!(text, "");
+        assert!(attachments.is_empty());
+    }
+
+    #[test]
+    fn wa_marker_target_trimmed() {
+        let (text, attachments) =
+            parse_wa_attachment_markers("[IMAGE:  https://example.com/img.png  ]");
+        assert!(text.is_empty());
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].target, "https://example.com/img.png");
+    }
+
+    #[test]
+    fn wa_marker_image_only_no_text() {
+        let (text, attachments) =
+            parse_wa_attachment_markers("[IMAGE:https://example.com/photo.jpg]");
+        assert!(text.is_empty());
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].kind, WhatsAppAttachmentKind::Image);
+    }
+
+    #[test]
+    fn wa_marker_case_sensitive() {
+        let (text, attachments) = parse_wa_attachment_markers("[image:https://img.png]");
+        assert_eq!(text, "[image:https://img.png]");
+        assert!(attachments.is_empty());
     }
 }
