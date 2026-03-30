@@ -21,6 +21,7 @@ pub struct StrategyAgent {
     min_edge: f64,
     ticks_since_prior_update: HashMap<String, u64>,
     pending_tom_beliefs: Vec<crate::consciousness::traits::TheoryOfMindBelief>,
+    dream_insights: Vec<String>,
 }
 
 impl StrategyAgent {
@@ -39,6 +40,7 @@ impl StrategyAgent {
             min_edge: 0.05,
             ticks_since_prior_update: HashMap::new(),
             pending_tom_beliefs: Vec::new(),
+            dream_insights: Vec::new(),
         }
     }
 
@@ -146,8 +148,42 @@ impl ConsciousnessAgent for StrategyAgent {
         AgentKind::Strategy
     }
 
-    fn perceive(&mut self, state: &ConsciousnessState, _signals: &[BusMessage]) -> Vec<Proposal> {
+    fn perceive(&mut self, state: &ConsciousnessState, signals: &[BusMessage]) -> Vec<Proposal> {
         let mut proposals = Vec::new();
+
+        for signal in signals {
+            if signal.topic == "dream_pattern" {
+                if let Some(pattern) = signal.payload.get("pattern").and_then(|v| v.as_str()) {
+                    let pattern_str = pattern.to_string();
+                    let count = self
+                        .dream_insights
+                        .iter()
+                        .filter(|p| **p == pattern_str)
+                        .count();
+                    self.dream_insights.push(pattern_str.clone());
+                    if count >= 3 {
+                        proposals.push(Proposal {
+                            id: self.next_id(),
+                            source: AgentKind::Strategy,
+                            action: format!("dream_guided:{pattern_str}"),
+                            reasoning: format!(
+                                "Recurring dream pattern (seen {} times): {pattern_str}",
+                                count + 1
+                            ),
+                            confidence: 0.6 + (count as f64 * 0.05).min(0.3),
+                            priority: Priority::Normal,
+                            contradicts: Vec::new(),
+                            timestamp: Utc::now(),
+                        });
+                    }
+                }
+            }
+        }
+
+        if self.dream_insights.len() > 100 {
+            let drain_count = self.dream_insights.len() - 100;
+            self.dream_insights.drain(..drain_count);
+        }
 
         let surprise = self.free_energy.lock().free_energy();
 
@@ -344,17 +380,22 @@ impl ConsciousnessAgent for StrategyAgent {
         for cal in &state.agent_calibration {
             if cal.total_predictions >= 3 {
                 let belief = if cal.calibration_error < 0.2 {
-                    format!("{:?} is well-calibrated (error={:.2})", cal.agent, cal.calibration_error)
+                    format!(
+                        "{:?} is well-calibrated (error={:.2})",
+                        cal.agent, cal.calibration_error
+                    )
                 } else {
-                    format!("{:?} is poorly calibrated (error={:.2}), discount its predictions", cal.agent, cal.calibration_error)
+                    format!(
+                        "{:?} is poorly calibrated (error={:.2}), discount its predictions",
+                        cal.agent, cal.calibration_error
+                    )
                 };
-                self.pending_tom_beliefs.push(
-                    crate::consciousness::traits::TheoryOfMindBelief {
+                self.pending_tom_beliefs
+                    .push(crate::consciousness::traits::TheoryOfMindBelief {
                         about_agent: cal.agent,
                         belief,
                         confidence: (1.0 - cal.calibration_error).max(0.1),
-                    },
-                );
+                    });
             }
         }
     }

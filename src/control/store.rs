@@ -19,6 +19,7 @@ pub struct Bot {
     pub memory_backend: String,
     pub uptime_secs: i64,
     pub registered_at: String,
+    pub workspace_dir: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,7 +74,7 @@ impl ControlStore {
         let db_path = workspace.join("control.db");
         let conn = Connection::open(&db_path)
             .with_context(|| format!("open control store at {}", db_path.display()))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
         let store = Self {
             db: Arc::new(Mutex::new(conn)),
         };
@@ -96,7 +97,8 @@ impl ControlStore {
                 provider TEXT NOT NULL DEFAULT '',
                 memory_backend TEXT NOT NULL DEFAULT '',
                 uptime_secs INTEGER NOT NULL DEFAULT 0,
-                registered_at TEXT NOT NULL DEFAULT (datetime('now'))
+                registered_at TEXT NOT NULL DEFAULT (datetime('now')),
+                workspace_dir TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,6 +123,7 @@ impl ControlStore {
             );
             CREATE INDEX IF NOT EXISTS idx_commands_bot ON commands(bot_id);
             CREATE INDEX IF NOT EXISTS idx_commands_status ON commands(status);
+            CREATE INDEX IF NOT EXISTS idx_commands_bot_status ON commands(bot_id, status);
             CREATE TABLE IF NOT EXISTS approvals (
                 id TEXT PRIMARY KEY,
                 command_id TEXT NOT NULL UNIQUE,
@@ -140,24 +143,26 @@ impl ControlStore {
             );
             CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(timestamp);",
         )?;
+        let _ =
+            db.execute_batch("ALTER TABLE bots ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';");
         Ok(())
     }
 
     pub fn upsert_bot(&self, bot: &Bot) -> Result<()> {
         let db = self.db.lock();
         db.execute(
-            "INSERT INTO bots (id, name, host, port, status, version, last_heartbeat, channels, provider, memory_backend, uptime_secs, registered_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            "INSERT INTO bots (id, name, host, port, status, version, last_heartbeat, channels, provider, memory_backend, uptime_secs, registered_at, workspace_dir)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(id) DO UPDATE SET
                name=excluded.name, host=excluded.host, port=excluded.port,
                status=excluded.status, version=excluded.version,
                last_heartbeat=excluded.last_heartbeat, channels=excluded.channels,
                provider=excluded.provider, memory_backend=excluded.memory_backend,
-               uptime_secs=excluded.uptime_secs",
+               uptime_secs=excluded.uptime_secs, workspace_dir=excluded.workspace_dir",
             rusqlite::params![
                 bot.id, bot.name, bot.host, bot.port, bot.status, bot.version,
                 bot.last_heartbeat, bot.channels, bot.provider, bot.memory_backend,
-                bot.uptime_secs, bot.registered_at,
+                bot.uptime_secs, bot.registered_at, bot.workspace_dir,
             ],
         )?;
         Ok(())
@@ -166,7 +171,7 @@ impl ControlStore {
     pub fn list_bots(&self) -> Result<Vec<Bot>> {
         let db = self.db.lock();
         let mut stmt = db.prepare(
-            "SELECT id, name, host, port, status, version, last_heartbeat, channels, provider, memory_backend, uptime_secs, registered_at FROM bots ORDER BY name"
+            "SELECT id, name, host, port, status, version, last_heartbeat, channels, provider, memory_backend, uptime_secs, registered_at, workspace_dir FROM bots ORDER BY name"
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(Bot {
@@ -182,6 +187,7 @@ impl ControlStore {
                 memory_backend: row.get(9)?,
                 uptime_secs: row.get(10)?,
                 registered_at: row.get(11)?,
+                workspace_dir: row.get(12)?,
             })
         })?;
         let mut bots = Vec::new();
@@ -194,7 +200,7 @@ impl ControlStore {
     pub fn get_bot(&self, id: &str) -> Result<Option<Bot>> {
         let db = self.db.lock();
         let mut stmt = db.prepare(
-            "SELECT id, name, host, port, status, version, last_heartbeat, channels, provider, memory_backend, uptime_secs, registered_at FROM bots WHERE id = ?1"
+            "SELECT id, name, host, port, status, version, last_heartbeat, channels, provider, memory_backend, uptime_secs, registered_at, workspace_dir FROM bots WHERE id = ?1"
         )?;
         let mut rows = stmt.query_map(rusqlite::params![id], |row| {
             Ok(Bot {
@@ -210,6 +216,7 @@ impl ControlStore {
                 memory_backend: row.get(9)?,
                 uptime_secs: row.get(10)?,
                 registered_at: row.get(11)?,
+                workspace_dir: row.get(12)?,
             })
         })?;
         match rows.next() {
@@ -498,6 +505,7 @@ mod tests {
             memory_backend: "sqlite".to_string(),
             uptime_secs: 100,
             registered_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            workspace_dir: String::new(),
         }
     }
 

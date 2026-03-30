@@ -818,6 +818,21 @@ impl Memory for SqliteMemory {
         .await?
     }
 
+    async fn clear(&self, category: Option<&MemoryCategory>) -> anyhow::Result<usize> {
+        let conn = self.conn.clone();
+        let cat = category.map(|c| c.to_string());
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+            let conn = conn.lock();
+            let affected = match cat {
+                Some(c) => conn.execute("DELETE FROM memories WHERE category = ?1", params![c])?,
+                None => conn.execute("DELETE FROM memories", [])?,
+            };
+            Ok(affected)
+        })
+        .await?
+    }
+
     async fn count(&self) -> anyhow::Result<usize> {
         let conn = self.conn.clone();
 

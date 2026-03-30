@@ -8,6 +8,7 @@ pub mod neuromodulation;
 pub mod orchestrator;
 pub mod peer_transport;
 pub mod prediction_market;
+pub mod profiling;
 pub mod somatic;
 pub mod traits;
 pub mod wisdom;
@@ -22,9 +23,12 @@ pub use narrative::{NarrativeEngine, NarrativeTheme};
 pub use neuromodulation::{
     NcnSignals, NeuromodulationEngine, NeuromodulatorSnapshot, NeuromodulatorState,
 };
-pub use orchestrator::{ConsciousnessConfig, ConsciousnessOrchestrator, TickResult};
+pub use orchestrator::{
+    ConsciousnessConfig, ConsciousnessOrchestrator, RebuttalStrategy, TickResult,
+};
 pub use peer_transport::{PeerMessage, PeerTransport};
 pub use prediction_market::{PredictionMarketLedger, PredictionRecord, StrategyPerformance};
+pub use profiling::{ConsciousnessProfiler, PhaseStats, ProfileSummary};
 pub use somatic::{
     AutobiographicalMemory, EnactiveLoop, FlowState, HomeostaticDrive, SomaticMarker, TheoryOfMind,
 };

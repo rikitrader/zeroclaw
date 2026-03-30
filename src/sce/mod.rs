@@ -647,6 +647,12 @@ mod tests {
         async fn forget(&self, _key: &str) -> Result<bool> {
             Ok(true)
         }
+        async fn clear(
+            &self,
+            _category: Option<&crate::memory::traits::MemoryCategory>,
+        ) -> Result<usize> {
+            Ok(0)
+        }
         async fn count(&self) -> Result<usize> {
             Ok(0)
         }

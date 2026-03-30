@@ -2859,6 +2859,13 @@ mod tests {
             Ok(false)
         }
 
+        async fn clear(
+            &self,
+            _category: Option<&crate::memory::MemoryCategory>,
+        ) -> anyhow::Result<usize> {
+            Ok(0)
+        }
+
         async fn count(&self) -> anyhow::Result<usize> {
             Ok(0)
         }

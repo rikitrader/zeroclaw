@@ -72,8 +72,8 @@ impl MetacognitiveAgent {
     }
 
     fn next_id(&mut self) -> u64 {
-        self.proposal_counter += 1;
-        self.proposal_counter + 7_000_000
+        self.proposal_counter = self.proposal_counter.wrapping_add(1);
+        self.proposal_counter.wrapping_add(7_000_000)
     }
 }
 
@@ -239,7 +239,7 @@ impl ConsciousnessAgent for MetacognitiveAgent {
         let actual_success =
             outcomes.iter().filter(|o| o.success).count() as f64 / outcomes.len() as f64;
         let drift_sample = (predicted_success - actual_success).abs();
-        self.calibration_drift = self.calibration_drift * 0.8 + drift_sample * 0.2;
+        self.calibration_drift = (self.calibration_drift * 0.8 + drift_sample * 0.2).min(1.0);
 
         let all_failed = outcomes.iter().all(|o| !o.success);
         if all_failed {

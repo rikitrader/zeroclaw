@@ -293,6 +293,31 @@ impl Memory for PostgresMemory {
         .await?
     }
 
+    async fn clear(&self, category: Option<&MemoryCategory>) -> Result<usize> {
+        let client = self.client.clone();
+        let qualified_table = self.qualified_table.clone();
+        let cat = category.map(|c| c.to_string());
+
+        tokio::task::spawn_blocking(move || -> Result<usize> {
+            let mut client = client.lock();
+            let deleted = match cat {
+                Some(c) => {
+                    let stmt =
+                        format!("DELETE FROM {qualified_table} WHERE category = $1");
+                    client.execute(&stmt, &[&c])?
+                }
+                None => {
+                    let stmt = format!("DELETE FROM {qualified_table}");
+                    client.execute(&stmt, &[])?
+                }
+            };
+            let count =
+                usize::try_from(deleted).context("PostgreSQL returned a negative delete count")?;
+            Ok(count)
+        })
+        .await?
+    }
+
     async fn count(&self) -> Result<usize> {
         let client = self.client.clone();
         let qualified_table = self.qualified_table.clone();

@@ -375,6 +375,10 @@ impl Memory for LucidMemory {
         self.local.forget(key).await
     }
 
+    async fn clear(&self, category: Option<&MemoryCategory>) -> anyhow::Result<usize> {
+        self.local.clear(category).await
+    }
+
     async fn count(&self) -> anyhow::Result<usize> {
         self.local.count().await
     }

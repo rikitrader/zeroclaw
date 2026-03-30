@@ -790,12 +790,35 @@ Allowlist Telegram username (without '@') or numeric user ID.",
 
         let is_group = Self::is_group_message(message);
         if self.mention_only && is_group {
-            let bot_username = self.bot_username.lock();
-            if let Some(ref bot_username) = *bot_username {
-                if !Self::contains_bot_mention(text, bot_username) {
-                    return None;
+            let is_reply_to_self = {
+                let reply_from_username = message
+                    .get("reply_to_message")
+                    .and_then(|r| r.get("from"))
+                    .and_then(|f| f.get("username"))
+                    .and_then(|u| u.as_str())
+                    .unwrap_or("");
+                let bot_username = self.bot_username.lock();
+                bot_username
+                    .as_ref()
+                    .map(|bu| bu.eq_ignore_ascii_case(reply_from_username))
+                    .unwrap_or(false)
+            };
+
+            let name_mentioned = {
+                let lower = text.to_lowercase();
+                lower.contains("riki")
+            };
+
+            let bot_mentioned = {
+                let bot_username = self.bot_username.lock();
+                if let Some(ref bot_username) = *bot_username {
+                    Self::contains_bot_mention(text, bot_username)
+                } else {
+                    false
                 }
-            } else {
+            };
+
+            if !bot_mentioned && !is_reply_to_self && !name_mentioned {
                 return None;
             }
         }

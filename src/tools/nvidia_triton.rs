@@ -229,6 +229,15 @@ impl Tool for NvidiaTritonInferenceTool {
 
                 let request = TritonInferRequest { inputs, outputs };
 
+                const MAX_TENSOR_PAYLOAD_BYTES: usize = 10_485_760;
+                let request_body = serde_json::to_string(&request)?;
+                if request_body.len() > MAX_TENSOR_PAYLOAD_BYTES {
+                    anyhow::bail!(
+                        "tensor payload exceeds 10MB limit ({} bytes)",
+                        request_body.len()
+                    );
+                }
+
                 let version = args
                     .get("model_version")
                     .and_then(|v| v.as_str())
@@ -246,7 +255,7 @@ impl Tool for NvidiaTritonInferenceTool {
                 match client
                     .post(&url)
                     .header("Content-Type", "application/json")
-                    .json(&request)
+                    .body(request_body)
                     .send()
                     .await
                 {
@@ -410,6 +419,26 @@ mod tests {
             .unwrap();
         assert!(!result.success);
         assert!(result.error.unwrap().contains("At least one input"));
+    }
+
+    #[tokio::test]
+    async fn execute_rejects_oversized_tensor_payload() {
+        let tool = test_tool();
+        let large_data: Vec<f64> = vec![1.0; 3_000_000];
+        let result = tool
+            .execute(json!({
+                "model_name": "test",
+                "inputs": [{
+                    "name": "input",
+                    "shape": [1, 3_000_000],
+                    "datatype": "FP64",
+                    "data": large_data
+                }]
+            }))
+            .await;
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("10MB limit"), "got: {err_msg}");
     }
 
     #[tokio::test]

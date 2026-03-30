@@ -22,7 +22,10 @@ use crate::util::truncate_with_ellipsis;
 use anyhow::{Context, Result};
 use axum::{
     body::Bytes,
-    extract::{ConnectInfo, Query, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        ConnectInfo, Query, State,
+    },
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post},
@@ -44,8 +47,22 @@ fn consciousness_snapshot_arc() -> Arc<Mutex<Option<ConsciousnessSnapshot>>> {
     Arc::clone(CONSCIOUSNESS_SNAPSHOT.get_or_init(|| Arc::new(Mutex::new(None))))
 }
 
+static CONSCIOUSNESS_TX: OnceLock<tokio::sync::broadcast::Sender<String>> = OnceLock::new();
+
+fn consciousness_broadcast_tx() -> tokio::sync::broadcast::Sender<String> {
+    CONSCIOUSNESS_TX
+        .get_or_init(|| {
+            let (tx, _) = tokio::sync::broadcast::channel(64);
+            tx
+        })
+        .clone()
+}
+
 pub fn update_consciousness_snapshot(snap: ConsciousnessSnapshot) {
     let arc = consciousness_snapshot_arc();
+    if let Ok(json) = serde_json::to_string(&snap) {
+        let _ = CONSCIOUSNESS_TX.get().map(|tx| tx.send(json));
+    }
     *arc.lock() = Some(snap);
 }
 
@@ -345,6 +362,7 @@ pub struct AppState {
     pub control_store: Option<Arc<crate::control::ControlStore>>,
     pub control_events_tx: Option<tokio::sync::broadcast::Sender<String>>,
     pub consciousness_snapshot: Arc<Mutex<Option<ConsciousnessSnapshot>>>,
+    pub consciousness_tx: tokio::sync::broadcast::Sender<String>,
 }
 
 /// Run the HTTP gateway using axum with proper HTTP/1.1 compliance.
@@ -564,6 +582,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         control_store,
         control_events_tx,
         consciousness_snapshot: consciousness_snapshot_arc(),
+        consciousness_tx: consciousness_broadcast_tx(),
     };
 
     // Build router with middleware
@@ -572,12 +591,30 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/status", get(dashboard::handle_api_status))
         .route("/api/channels", get(dashboard::handle_api_channels))
         .route("/api/system", get(dashboard::handle_api_system))
-        .route("/api/control/bots", get(crate::control::handlers::handle_bots_list))
-        .route("/api/control/commands", get(crate::control::handlers::handle_commands_list))
-        .route("/api/control/approvals", get(crate::control::handlers::handle_approvals_list))
-        .route("/api/control/approvals/{id}", post(crate::control::handlers::handle_approval_action))
-        .route("/api/control/audit", get(crate::control::handlers::handle_audit_log))
-        .route("/api/control/events/stream", get(crate::control::handlers::handle_events_stream))
+        .route(
+            "/api/control/bots",
+            get(crate::control::handlers::handle_bots_list),
+        )
+        .route(
+            "/api/control/commands",
+            get(crate::control::handlers::handle_commands_list),
+        )
+        .route(
+            "/api/control/approvals",
+            get(crate::control::handlers::handle_approvals_list),
+        )
+        .route(
+            "/api/control/approvals/{id}",
+            post(crate::control::handlers::handle_approval_action),
+        )
+        .route(
+            "/api/control/audit",
+            get(crate::control::handlers::handle_audit_log),
+        )
+        .route(
+            "/api/control/events/stream",
+            get(crate::control::handlers::handle_events_stream),
+        )
         .route("/health", get(handle_health))
         .route("/metrics", get(handle_metrics))
         .route("/pair", post(handle_pair))
@@ -596,6 +633,10 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         )
         .route("/api/consciousness/brain_scan", get(handle_brain_scan))
         .route("/api/consciousness/sync", post(handle_consciousness_sync))
+        .route(
+            "/api/consciousness/stream",
+            get(handle_consciousness_stream),
+        )
         .route(
             "/api/control/metrics",
             get(crate::control::handlers::handle_control_metrics),
@@ -625,7 +666,14 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
 async fn handle_consciousness_status(State(state): State<AppState>) -> impl IntoResponse {
     let guard = state.consciousness_snapshot.lock();
     match guard.as_ref() {
-        Some(snap) => (StatusCode::OK, Json(serde_json::to_value(snap).unwrap())).into_response(),
+        Some(snap) => match serde_json::to_value(snap) {
+            Ok(val) => (StatusCode::OK, Json(val)).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("serialization failed: {e}")})),
+            )
+                .into_response(),
+        },
         None => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({"error": "consciousness subsystem not active"})),
@@ -837,6 +885,56 @@ async fn handle_consciousness_sync(
     *state.consciousness_snapshot.lock() = Some(snap);
 
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+}
+
+/// GET /api/consciousness/stream — WebSocket for real-time consciousness updates
+async fn handle_consciousness_stream(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| consciousness_ws_handler(socket, state))
+}
+
+async fn consciousness_ws_handler(mut socket: WebSocket, state: AppState) {
+    let mut rx = state.consciousness_tx.subscribe();
+
+    let initial = { state.consciousness_snapshot.lock().clone() };
+    if let Some(snap) = initial {
+        if let Ok(json) = serde_json::to_string(&snap) {
+            if socket.send(Message::Text(json.into())).await.is_err() {
+                return;
+            }
+        }
+    }
+
+    loop {
+        tokio::select! {
+            msg = rx.recv() => {
+                match msg {
+                    Ok(json) => {
+                        if socket.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::debug!("consciousness WS client lagged {n} messages");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            msg = socket.recv() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(Message::Ping(data))) => {
+                        if socket.send(Message::Pong(data)).await.is_err() {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }
 
 /// GET /health — always public (no secrets leaked)
@@ -1418,6 +1516,7 @@ mod tests {
             control_store: None,
             control_events_tx: None,
             consciousness_snapshot: Arc::new(Mutex::new(None)),
+            consciousness_tx: tokio::sync::broadcast::channel(16).0,
         };
 
         let response = handle_metrics(State(state)).await.into_response();
@@ -1462,6 +1561,7 @@ mod tests {
             control_store: None,
             control_events_tx: None,
             consciousness_snapshot: Arc::new(Mutex::new(None)),
+            consciousness_tx: tokio::sync::broadcast::channel(16).0,
         };
 
         let response = handle_metrics(State(state)).await.into_response();
@@ -1703,6 +1803,13 @@ mod tests {
             Ok(false)
         }
 
+        async fn clear(
+            &self,
+            _category: Option<&MemoryCategory>,
+        ) -> anyhow::Result<usize> {
+            Ok(0)
+        }
+
         async fn count(&self) -> anyhow::Result<usize> {
             Ok(0)
         }
@@ -1781,6 +1888,13 @@ mod tests {
             Ok(false)
         }
 
+        async fn clear(
+            &self,
+            _category: Option<&MemoryCategory>,
+        ) -> anyhow::Result<usize> {
+            Ok(0)
+        }
+
         async fn count(&self) -> anyhow::Result<usize> {
             let size = self.keys.lock().len();
             Ok(size)
@@ -1819,6 +1933,7 @@ mod tests {
             control_store: None,
             control_events_tx: None,
             consciousness_snapshot: Arc::new(Mutex::new(None)),
+            consciousness_tx: tokio::sync::broadcast::channel(16).0,
         };
 
         let mut headers = HeaderMap::new();
@@ -1878,6 +1993,7 @@ mod tests {
             control_store: None,
             control_events_tx: None,
             consciousness_snapshot: Arc::new(Mutex::new(None)),
+            consciousness_tx: tokio::sync::broadcast::channel(16).0,
         };
 
         let headers = HeaderMap::new();
@@ -1946,6 +2062,7 @@ mod tests {
             control_store: None,
             control_events_tx: None,
             consciousness_snapshot: Arc::new(Mutex::new(None)),
+            consciousness_tx: tokio::sync::broadcast::channel(16).0,
         };
 
         let response = handle_webhook(
@@ -1987,6 +2104,7 @@ mod tests {
             control_store: None,
             control_events_tx: None,
             consciousness_snapshot: Arc::new(Mutex::new(None)),
+            consciousness_tx: tokio::sync::broadcast::channel(16).0,
         };
 
         let mut headers = HeaderMap::new();
@@ -2031,6 +2149,7 @@ mod tests {
             control_store: None,
             control_events_tx: None,
             consciousness_snapshot: Arc::new(Mutex::new(None)),
+            consciousness_tx: tokio::sync::broadcast::channel(16).0,
         };
 
         let mut headers = HeaderMap::new();

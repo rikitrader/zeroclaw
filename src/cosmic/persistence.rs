@@ -44,7 +44,9 @@ impl CosmicPersistence {
         let path = self.base_dir.join(format!("{name}.json"));
         let json = serde_json::to_string_pretty(data)
             .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
-        std::fs::write(&path, json).map_err(|e| PersistenceError::Io(e.to_string()))
+        let tmp_path = path.with_extension("json.tmp");
+        std::fs::write(&tmp_path, json).map_err(|e| PersistenceError::Io(e.to_string()))?;
+        std::fs::rename(&tmp_path, &path).map_err(|e| PersistenceError::Io(e.to_string()))
     }
 
     pub fn load_module(&self, name: &str) -> Result<serde_json::Value, PersistenceError> {

@@ -794,8 +794,8 @@ impl OpenAiCompatibleProvider {
     }
 
     fn parse_native_response(&self, message: ResponseMessage) -> ProviderChatResponse {
-        let text = message.effective_content_optional();
-        let reasoning_content = message.reasoning_content.clone();
+        let _text = message.effective_content_optional();
+        let _reasoning_content = message.reasoning_content.clone();
         let mut used_tool_call_ids = std::collections::HashSet::new();
         let tool_calls = message
             .tool_calls
@@ -1103,7 +1103,7 @@ impl Provider for OpenAiCompatibleProvider {
             .ok_or_else(|| anyhow::anyhow!("No response from {}", self.name))?;
 
         let text = choice.message.effective_content_optional();
-        let reasoning_content = choice.message.reasoning_content;
+        let _reasoning_content = choice.message.reasoning_content;
         let mut used_tool_call_ids = std::collections::HashSet::new();
         let tool_calls = choice
             .message

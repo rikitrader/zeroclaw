@@ -759,11 +759,17 @@ fn feedback_loop_1_conscience_norms_block_harmful_proposals() {
         contradicts: Vec::new(),
         timestamp: Utc::now(),
     };
-    let all: Vec<_> = proposals.into_iter().chain(std::iter::once(test_proposal)).collect();
+    let all: Vec<_> = proposals
+        .into_iter()
+        .chain(std::iter::once(test_proposal))
+        .collect();
     let verdicts = agent.deliberate(&all, &state);
 
     let harmful_verdict = verdicts.iter().find(|v| v.proposal_id == 10001);
-    assert!(harmful_verdict.is_some(), "conscience must vote on harmful proposal");
+    assert!(
+        harmful_verdict.is_some(),
+        "conscience must vote on harmful proposal"
+    );
     assert_eq!(
         harmful_verdict.unwrap().kind,
         zeroclaw::consciousness::traits::VerdictKind::Reject,
@@ -795,18 +801,19 @@ fn feedback_loop_2_wisdom_entries_boost_strategy_confidence() {
         timestamp: Utc::now(),
     };
 
-    let verdicts_no_wisdom = agent.deliberate(std::slice::from_ref(&test_proposal), &state_no_wisdom);
+    let verdicts_no_wisdom =
+        agent.deliberate(std::slice::from_ref(&test_proposal), &state_no_wisdom);
     let kind_no_wisdom = verdicts_no_wisdom[0].kind;
 
     let mut state_with_wisdom = ConsciousnessState::default();
-    state_with_wisdom.wisdom_entries.push(
-        zeroclaw::consciousness::wisdom::WisdomEntry {
+    state_with_wisdom
+        .wisdom_entries
+        .push(zeroclaw::consciousness::wisdom::WisdomEntry {
             principle: "Performance optimization yields high returns".to_string(),
             evidence_count: 5,
             confidence: 0.8,
             domain: "optimize".to_string(),
-        },
-    );
+        });
 
     let verdicts_with_wisdom = agent.deliberate(&[test_proposal], &state_with_wisdom);
     let kind_with_wisdom = verdicts_with_wisdom[0].kind;
@@ -845,22 +852,22 @@ fn feedback_loop_3_somatic_markers_affect_execution_throttling() {
     let calm_kind = verdicts_calm[0].kind;
 
     let mut stressed_state = ConsciousnessState::default();
-    stressed_state.somatic_markers.push(
-        zeroclaw::consciousness::somatic::SomaticMarker {
+    stressed_state
+        .somatic_markers
+        .push(zeroclaw::consciousness::somatic::SomaticMarker {
             marker_type: "stress".to_string(),
             intensity: 0.9,
             trigger: "high_load".to_string(),
             timestamp: Utc::now(),
-        },
-    );
-    stressed_state.somatic_markers.push(
-        zeroclaw::consciousness::somatic::SomaticMarker {
+        });
+    stressed_state
+        .somatic_markers
+        .push(zeroclaw::consciousness::somatic::SomaticMarker {
             marker_type: "danger".to_string(),
             intensity: 0.8,
             trigger: "threat_detected".to_string(),
             timestamp: Utc::now(),
-        },
-    );
+        });
     stressed_state.neuromodulation.cortisol = 0.8;
 
     let verdicts_stressed = agent.deliberate(&[test_proposal], &stressed_state);
@@ -877,7 +884,11 @@ fn feedback_loop_3_somatic_markers_affect_execution_throttling() {
         "high stress should throttle (reject) execution"
     );
     assert!(
-        verdicts_stressed[0].objection.as_ref().unwrap().contains("throttled"),
+        verdicts_stressed[0]
+            .objection
+            .as_ref()
+            .unwrap()
+            .contains("throttled"),
         "throttle objection should mention throttling"
     );
 }
@@ -981,36 +992,34 @@ fn feedback_loop_8_tom_beliefs_generated_from_calibration() {
     let mut agent = StrategyAgent::new(cf, policy, fe);
 
     let mut state = ConsciousnessState::default();
-    state.agent_calibration.push(
-        zeroclaw::consciousness::traits::AgentCalibration {
+    state
+        .agent_calibration
+        .push(zeroclaw::consciousness::traits::AgentCalibration {
             agent: AgentKind::Research,
             brier_score: 0.1,
             calibration_error: 0.15,
             win_rate: 0.8,
             total_predictions: 10,
-        },
-    );
-    state.agent_calibration.push(
-        zeroclaw::consciousness::traits::AgentCalibration {
+        });
+    state
+        .agent_calibration
+        .push(zeroclaw::consciousness::traits::AgentCalibration {
             agent: AgentKind::Execution,
             brier_score: 0.4,
             calibration_error: 0.5,
             win_rate: 0.4,
             total_predictions: 8,
-        },
-    );
+        });
 
-    let outcomes = vec![
-        zeroclaw::consciousness::traits::ActionOutcome {
-            agent: AgentKind::Strategy,
-            proposal_id: 1,
-            action: "test".to_string(),
-            success: true,
-            impact: 0.5,
-            learnings: Vec::new(),
-            timestamp: Utc::now(),
-        },
-    ];
+    let outcomes = vec![zeroclaw::consciousness::traits::ActionOutcome {
+        agent: AgentKind::Strategy,
+        proposal_id: 1,
+        action: "test".to_string(),
+        success: true,
+        impact: 0.5,
+        learnings: Vec::new(),
+        timestamp: Utc::now(),
+    }];
     agent.reflect(&outcomes, &state);
 
     let beliefs = agent.theory_of_mind_beliefs();
@@ -1019,14 +1028,24 @@ fn feedback_loop_8_tom_beliefs_generated_from_calibration() {
         "should generate ToM beliefs from calibration data: got {}",
         beliefs.len()
     );
-    let research_belief = beliefs.iter().find(|b| b.about_agent == AgentKind::Research);
-    assert!(research_belief.is_some(), "should have belief about Research agent");
+    let research_belief = beliefs
+        .iter()
+        .find(|b| b.about_agent == AgentKind::Research);
+    assert!(
+        research_belief.is_some(),
+        "should have belief about Research agent"
+    );
     assert!(
         research_belief.unwrap().belief.contains("well-calibrated"),
         "Research agent with low error should be well-calibrated"
     );
-    let exec_belief = beliefs.iter().find(|b| b.about_agent == AgentKind::Execution);
-    assert!(exec_belief.is_some(), "should have belief about Execution agent");
+    let exec_belief = beliefs
+        .iter()
+        .find(|b| b.about_agent == AgentKind::Execution);
+    assert!(
+        exec_belief.is_some(),
+        "should have belief about Execution agent"
+    );
     assert!(
         exec_belief.unwrap().belief.contains("poorly calibrated"),
         "Execution agent with high error should be poorly calibrated"
@@ -1089,6 +1108,8 @@ fn feedback_loop_10_neuromodulation_state_exposed_to_agents() {
     assert!(
         ncn.precision >= 0.0 && ncn.gain >= 0.0 && ncn.ffn_gate >= 0.0,
         "NCN signals should be non-negative: p={}, g={}, f={}",
-        ncn.precision, ncn.gain, ncn.ffn_gate
+        ncn.precision,
+        ncn.gain,
+        ncn.ffn_gate
     );
 }

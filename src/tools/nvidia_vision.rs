@@ -67,6 +67,33 @@ impl Tool for NvidiaVisionTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'image_url' parameter"))?;
 
+        if !image_url.starts_with("https://") {
+            anyhow::bail!("image_url must use https:// scheme");
+        }
+
+        let host = image_url
+            .strip_prefix("https://")
+            .and_then(|s| s.split('/').next())
+            .and_then(|s| s.split(':').next())
+            .unwrap_or("");
+
+        if host.is_empty()
+            || host == "localhost"
+            || host.starts_with("127.")
+            || host.starts_with("10.")
+            || host.starts_with("192.168.")
+            || host.starts_with("169.254.")
+            || host == "0.0.0.0"
+            || (host.starts_with("172.")
+                && host
+                    .split('.')
+                    .nth(1)
+                    .and_then(|o| o.parse::<u8>().ok())
+                    .map_or(false, |o| (16..=31).contains(&o)))
+        {
+            anyhow::bail!("image_url must not point to private/internal addresses");
+        }
+
         let prompt = args
             .get("prompt")
             .and_then(|v| v.as_str())
@@ -206,5 +233,71 @@ mod tests {
             .execute(json!({"image_url": "https://example.com/img.png"}))
             .await;
         assert!(result.is_err() || !result.unwrap().success);
+    }
+
+    #[tokio::test]
+    async fn execute_rejects_http_scheme() {
+        let tool = test_tool();
+        let result = tool
+            .execute(json!({"image_url": "http://example.com/img.png", "prompt": "describe"}))
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("https://"));
+    }
+
+    #[tokio::test]
+    async fn execute_rejects_file_scheme() {
+        let tool = test_tool();
+        let result = tool
+            .execute(json!({"image_url": "file:///etc/passwd", "prompt": "describe"}))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn execute_rejects_localhost() {
+        let tool = test_tool();
+        let result = tool
+            .execute(json!({"image_url": "https://localhost/img.png", "prompt": "describe"}))
+            .await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("private/internal"));
+    }
+
+    #[tokio::test]
+    async fn execute_rejects_private_ip_ranges() {
+        let tool = test_tool();
+        for url in [
+            "https://10.0.0.1/img.png",
+            "https://172.16.0.1/img.png",
+            "https://172.31.255.255/img.png",
+            "https://192.168.1.1/img.png",
+            "https://169.254.0.1/img.png",
+            "https://127.0.0.1/img.png",
+            "https://0.0.0.0/img.png",
+        ] {
+            let result = tool
+                .execute(json!({"image_url": url, "prompt": "describe"}))
+                .await;
+            assert!(result.is_err(), "should reject {}", url);
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_allows_172_outside_private_range() {
+        let tool = test_tool();
+        let result = tool
+            .execute(json!({"image_url": "https://172.15.0.1/img.png", "prompt": "describe"}))
+            .await;
+        assert!(result.is_ok() || result.is_err());
+        if let Err(e) = &result {
+            assert!(
+                !e.to_string().contains("private/internal"),
+                "172.15.x.x should not be blocked"
+            );
+        }
     }
 }

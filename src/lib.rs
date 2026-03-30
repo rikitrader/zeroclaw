@@ -77,6 +77,7 @@ pub mod skills;
 pub mod soul;
 pub mod taskqueue;
 pub mod tools;
+pub mod turboquant;
 pub mod tunnel;
 pub mod util;
 #[cfg(feature = "wallet")]

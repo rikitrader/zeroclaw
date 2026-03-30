@@ -91,6 +91,27 @@ impl Observer for LogObserver {
                     "survival.tier_change"
                 );
             }
+            ObserverEvent::ConsciousnessTick {
+                tick_count,
+                coherence,
+                proposals_generated,
+                proposals_approved,
+                proposals_vetoed,
+                debate_rounds_used,
+                duration,
+            } => {
+                let ms = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+                info!(
+                    tick = tick_count,
+                    coherence = %format!("{coherence:.3}"),
+                    generated = proposals_generated,
+                    approved = proposals_approved,
+                    vetoed = proposals_vetoed,
+                    debate_rounds = debate_rounds_used,
+                    duration_ms = ms,
+                    "consciousness.tick"
+                );
+            }
         }
     }
 
@@ -165,6 +186,15 @@ mod tests {
         obs.record_event(&ObserverEvent::Error {
             component: "provider".into(),
             message: "timeout".into(),
+        });
+        obs.record_event(&ObserverEvent::ConsciousnessTick {
+            tick_count: 7,
+            coherence: 0.92,
+            proposals_generated: 4,
+            proposals_approved: 3,
+            proposals_vetoed: 0,
+            debate_rounds_used: 2,
+            duration: Duration::from_millis(80),
         });
     }
 

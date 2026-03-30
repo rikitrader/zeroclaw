@@ -27,6 +27,9 @@ pub struct OtelObserver {
     tokens_used: Counter<u64>,
     active_sessions: Gauge<u64>,
     queue_depth: Gauge<u64>,
+    consciousness_ticks: Counter<u64>,
+    consciousness_coherence: Gauge<f64>,
+    consciousness_tick_duration: Histogram<f64>,
 }
 
 impl OtelObserver {
@@ -150,6 +153,22 @@ impl OtelObserver {
             .with_description("Current message queue depth")
             .build();
 
+        let consciousness_ticks = meter
+            .u64_counter("zeroclaw.consciousness.ticks")
+            .with_description("Total consciousness orchestrator ticks")
+            .build();
+
+        let consciousness_coherence = meter
+            .f64_gauge("zeroclaw.consciousness.coherence")
+            .with_description("Current consciousness coherence level")
+            .build();
+
+        let consciousness_tick_duration = meter
+            .f64_histogram("zeroclaw.consciousness.tick_duration")
+            .with_description("Consciousness tick duration in seconds")
+            .with_unit("s")
+            .build();
+
         Ok(Self {
             tracer_provider,
             meter_provider: meter_provider_clone,
@@ -166,6 +185,9 @@ impl OtelObserver {
             tokens_used,
             active_sessions,
             queue_depth,
+            consciousness_ticks,
+            consciousness_coherence,
+            consciousness_tick_duration,
         })
     }
 }
@@ -347,6 +369,53 @@ impl Observer for OtelObserver {
                 );
                 span.end();
             }
+            ObserverEvent::ConsciousnessTick {
+                tick_count,
+                coherence,
+                proposals_generated,
+                proposals_approved,
+                proposals_vetoed,
+                debate_rounds_used,
+                duration,
+            } => {
+                let secs = duration.as_secs_f64();
+                let start_time = SystemTime::now()
+                    .checked_sub(*duration)
+                    .unwrap_or(SystemTime::now());
+
+                let mut span = tracer.build(
+                    opentelemetry::trace::SpanBuilder::from_name("consciousness.tick")
+                        .with_kind(SpanKind::Internal)
+                        .with_start_time(start_time)
+                        .with_attributes(vec![
+                            KeyValue::new("consciousness.tick_count", *tick_count as i64),
+                            KeyValue::new("consciousness.coherence", *coherence),
+                            KeyValue::new(
+                                "consciousness.proposals_generated",
+                                *proposals_generated as i64,
+                            ),
+                            KeyValue::new(
+                                "consciousness.proposals_approved",
+                                *proposals_approved as i64,
+                            ),
+                            KeyValue::new(
+                                "consciousness.proposals_vetoed",
+                                *proposals_vetoed as i64,
+                            ),
+                            KeyValue::new(
+                                "consciousness.debate_rounds",
+                                *debate_rounds_used as i64,
+                            ),
+                            KeyValue::new("duration_s", secs),
+                        ]),
+                );
+                span.set_status(Status::Ok);
+                span.end();
+
+                self.consciousness_ticks.add(1, &[]);
+                self.consciousness_coherence.record(*coherence, &[]);
+                self.consciousness_tick_duration.record(secs, &[]);
+            }
         }
     }
 
@@ -524,6 +593,29 @@ mod tests {
         obs.record_metric(&ObserverMetric::TokensUsed(0));
         obs.record_metric(&ObserverMetric::ActiveSessions(0));
         obs.record_metric(&ObserverMetric::QueueDepth(0));
+    }
+
+    #[test]
+    fn otel_records_consciousness_tick_without_panic() {
+        let obs = test_observer();
+        obs.record_event(&ObserverEvent::ConsciousnessTick {
+            tick_count: 42,
+            coherence: 0.85,
+            proposals_generated: 5,
+            proposals_approved: 3,
+            proposals_vetoed: 1,
+            debate_rounds_used: 3,
+            duration: Duration::from_millis(150),
+        });
+        obs.record_event(&ObserverEvent::ConsciousnessTick {
+            tick_count: 0,
+            coherence: 0.0,
+            proposals_generated: 0,
+            proposals_approved: 0,
+            proposals_vetoed: 0,
+            debate_rounds_used: 0,
+            duration: Duration::ZERO,
+        });
     }
 
     #[test]

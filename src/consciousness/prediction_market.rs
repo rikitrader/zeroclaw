@@ -174,6 +174,18 @@ impl PredictionMarketLedger {
         self.records.iter().filter(|r| !r.resolved).collect()
     }
 
+    pub fn unresolved_by_domain(&self) -> std::collections::HashMap<&str, Vec<(u64, f64)>> {
+        let mut index: std::collections::HashMap<&str, Vec<(u64, f64)>> =
+            std::collections::HashMap::new();
+        for r in self.records.iter().filter(|r| !r.resolved) {
+            index
+                .entry(&r.domain)
+                .or_default()
+                .push((r.id, r.predicted_outcome));
+        }
+        index
+    }
+
     pub fn domain_calibration(&self, domain: &str) -> f64 {
         let resolved: Vec<&PredictionRecord> = self
             .records
@@ -197,6 +209,12 @@ impl PredictionMarketLedger {
 
     pub fn entries(&self) -> &[PredictionRecord] {
         &self.records
+    }
+
+    pub fn restore(&mut self, records: Vec<PredictionRecord>) {
+        self.records = records;
+        self.records.truncate(self.capacity);
+        self.next_id = self.records.iter().map(|r| r.id + 1).max().unwrap_or(0);
     }
 }
 
