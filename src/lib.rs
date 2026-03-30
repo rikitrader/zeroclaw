@@ -66,8 +66,10 @@ pub mod observability;
 pub mod onboard;
 pub mod peripherals;
 pub mod providers;
+pub mod quantum;
 pub mod rag;
 pub mod runtime;
+pub mod sce;
 pub mod security;
 pub mod service;
 pub mod skillforge;
@@ -75,6 +77,7 @@ pub mod skills;
 pub mod soul;
 pub mod taskqueue;
 pub mod tools;
+pub mod turboquant;
 pub mod tunnel;
 pub mod util;
 #[cfg(feature = "wallet")]

@@ -211,9 +211,47 @@ impl Memory for MarkdownMemory {
     }
 
     async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
-        // Markdown memory is append-only by design (audit trail)
-        // Return false to indicate the entry wasn't removed
+        // Markdown memory is append-only by design (audit trail).
+        // Individual key deletion is not supported.
         Ok(false)
+    }
+
+    async fn clear(&self, category: Option<&MemoryCategory>) -> anyhow::Result<usize> {
+        let entries_before = self.read_all_entries().await?.len();
+
+        match category {
+            Some(MemoryCategory::Core) => {
+                let path = self.core_path();
+                if path.exists() {
+                    fs::remove_file(&path).await?;
+                }
+            }
+            Some(MemoryCategory::Daily | MemoryCategory::Conversation) => {
+                let dir = self.memory_dir();
+                if dir.exists() {
+                    fs::remove_dir_all(&dir).await?;
+                    fs::create_dir_all(&dir).await?;
+                }
+            }
+            Some(MemoryCategory::Custom(_)) => {
+                // Custom categories in markdown land in daily files;
+                // clearing them individually is not supported.
+            }
+            None => {
+                let core = self.core_path();
+                if core.exists() {
+                    fs::remove_file(&core).await?;
+                }
+                let dir = self.memory_dir();
+                if dir.exists() {
+                    fs::remove_dir_all(&dir).await?;
+                    fs::create_dir_all(&dir).await?;
+                }
+            }
+        }
+
+        let entries_after = self.read_all_entries().await?.len();
+        Ok(entries_before.saturating_sub(entries_after))
     }
 
     async fn count(&self) -> anyhow::Result<usize> {

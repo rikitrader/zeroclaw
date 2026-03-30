@@ -1,4 +1,7 @@
-use super::traits::{ChatMessage, ChatResponse, StreamChunk, StreamOptions, StreamResult};
+use super::traits::{
+    ChatMessage, ChatRequest, ChatResponse, InferenceProvider, StreamChunk, StreamOptions,
+    StreamResult,
+};
 use super::Provider;
 use async_trait::async_trait;
 use futures_util::{stream, StreamExt};
@@ -247,7 +250,7 @@ impl ReliableProvider {
 }
 
 #[async_trait]
-impl Provider for ReliableProvider {
+impl InferenceProvider for ReliableProvider {
     async fn warmup(&self) -> anyhow::Result<()> {
         for (name, provider) in &self.providers {
             tracing::info!(provider = name, "Warming up provider connection pool");
@@ -467,12 +470,112 @@ impl Provider for ReliableProvider {
             failures.join("\n")
         )
     }
+}
 
+#[async_trait]
+impl Provider for ReliableProvider {
     fn supports_native_tools(&self) -> bool {
         self.providers
             .first()
             .map(|(_, p)| p.supports_native_tools())
             .unwrap_or(false)
+    }
+
+    async fn chat(
+        &self,
+        request: ChatRequest<'_>,
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<ChatResponse> {
+        let models = self.model_chain(model);
+        let mut failures = Vec::new();
+
+        for current_model in &models {
+            for (provider_name, provider) in &self.providers {
+                let mut backoff_ms = self.base_backoff_ms;
+
+                for attempt in 0..=self.max_retries {
+                    match provider.chat(request, current_model, temperature).await {
+                        Ok(resp) => {
+                            if attempt > 0 || *current_model != model {
+                                tracing::info!(
+                                    provider = provider_name,
+                                    model = *current_model,
+                                    attempt,
+                                    original_model = model,
+                                    "Provider recovered (failover/retry)"
+                                );
+                            }
+                            return Ok(resp);
+                        }
+                        Err(e) => {
+                            let non_retryable_rate_limit = is_non_retryable_rate_limit(&e);
+                            let non_retryable = is_non_retryable(&e) || non_retryable_rate_limit;
+                            let rate_limited = is_rate_limited(&e);
+                            let failure_reason = failure_reason(rate_limited, non_retryable);
+                            let error_detail = compact_error_detail(&e);
+
+                            push_failure(
+                                &mut failures,
+                                provider_name,
+                                current_model,
+                                attempt + 1,
+                                self.max_retries + 1,
+                                failure_reason,
+                                &error_detail,
+                            );
+
+                            if rate_limited && !non_retryable_rate_limit {
+                                if let Some(new_key) = self.rotate_key() {
+                                    tracing::info!(
+                                        provider = provider_name,
+                                        error = %error_detail,
+                                        "Rate limited, rotated API key (key ending ...{})",
+                                        &new_key[new_key.len().saturating_sub(4)..]
+                                    );
+                                }
+                            }
+
+                            if non_retryable {
+                                tracing::warn!(
+                                    provider = provider_name,
+                                    model = *current_model,
+                                    error = %error_detail,
+                                    "Non-retryable error, moving on"
+                                );
+                                break;
+                            }
+
+                            if attempt < self.max_retries {
+                                let wait = self.compute_backoff(backoff_ms, &e);
+                                tracing::warn!(
+                                    provider = provider_name,
+                                    model = *current_model,
+                                    attempt = attempt + 1,
+                                    backoff_ms = wait,
+                                    reason = failure_reason,
+                                    error = %error_detail,
+                                    "Provider call failed, retrying"
+                                );
+                                tokio::time::sleep(Duration::from_millis(wait)).await;
+                                backoff_ms = (backoff_ms.saturating_mul(2)).min(10_000);
+                            }
+                        }
+                    }
+                }
+
+                tracing::warn!(
+                    provider = provider_name,
+                    model = *current_model,
+                    "Exhausted retries, trying next provider/model"
+                );
+            }
+        }
+
+        anyhow::bail!(
+            "All providers/models failed. Attempts:\n{}",
+            failures.join("\n")
+        )
     }
 
     async fn chat_with_tools(
@@ -663,7 +766,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl Provider for MockProvider {
+    impl InferenceProvider for MockProvider {
         async fn chat_with_system(
             &self,
             _system_prompt: Option<&str>,
@@ -692,6 +795,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl Provider for MockProvider {}
+
     /// Mock that records which model was used for each call.
     struct ModelAwareMock {
         calls: Arc<AtomicUsize>,
@@ -701,7 +807,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl Provider for ModelAwareMock {
+    impl InferenceProvider for ModelAwareMock {
         async fn chat_with_system(
             &self,
             _system_prompt: Option<&str>,
@@ -717,6 +823,9 @@ mod tests {
             Ok(self.response.to_string())
         }
     }
+
+    #[async_trait]
+    impl Provider for ModelAwareMock {}
 
     // ── Existing tests (preserved) ──
 
@@ -1375,7 +1484,7 @@ mod tests {
     // ── Arc<ModelAwareMock> Provider impl for test ──
 
     #[async_trait]
-    impl Provider for Arc<ModelAwareMock> {
+    impl InferenceProvider for Arc<ModelAwareMock> {
         async fn chat_with_system(
             &self,
             system_prompt: Option<&str>,
@@ -1388,4 +1497,7 @@ mod tests {
                 .await
         }
     }
+
+    #[async_trait]
+    impl Provider for Arc<ModelAwareMock> {}
 }

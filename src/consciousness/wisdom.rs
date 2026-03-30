@@ -68,6 +68,11 @@ impl WisdomAccumulator {
         &self.entries
     }
 
+    pub fn restore(&mut self, entries: Vec<WisdomEntry>) {
+        self.entries = entries;
+        self.entries.truncate(self.capacity);
+    }
+
     pub fn high_confidence_wisdom(&self) -> Vec<&WisdomEntry> {
         self.entries
             .iter()

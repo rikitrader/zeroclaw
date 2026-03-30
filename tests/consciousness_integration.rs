@@ -20,7 +20,7 @@ use zeroclaw::continuity::{ContinuityGuard, DriftLimits};
 use zeroclaw::cosmic::{
     AgentPool, AgentRole, CausalGraph, ConsolidationEngine, Constitution, CosmicMemoryGraph,
     CounterfactualEngine, DriftDetector, EmotionalModulator, FreeEnergyState, GlobalWorkspace,
-    IntegrationMeter, NormativeEngine, PolicyEngine, SelfModel, SubsystemId, WorldModel,
+    IntegrationMeter, NormKind, NormativeEngine, PolicyEngine, SelfModel, SubsystemId, WorldModel,
 };
 
 struct CosmicSubsystems {
@@ -359,6 +359,7 @@ fn peer_message_state_serialization_roundtrip() {
             attention: 0.7,
             arousal: 0.5,
             valence: 0.1,
+            ..Default::default()
         },
         coherence: 0.85,
         tick_count: 42,
@@ -400,6 +401,7 @@ fn peer_message_size_under_datagram_limit() {
             attention: 1.0,
             arousal: 1.0,
             valence: -1.0,
+            ..Default::default()
         },
         coherence: 0.99,
         tick_count: u64::MAX,
@@ -576,7 +578,7 @@ fn full_orchestrator_tick_with_build_all_agents() {
         integration,
     );
 
-    assert_eq!(agents.len(), 8);
+    assert_eq!(agents.len(), 9);
 
     let mut orch = ConsciousnessOrchestrator::new(ConsciousnessConfig::default());
     for agent in agents {
@@ -587,4 +589,527 @@ fn full_orchestrator_tick_with_build_all_agents() {
     assert!(result.proposals_generated > 0);
     assert!(result.coherence >= 0.0 && result.coherence <= 1.0);
     assert_eq!(orch.state().tick_count, 1);
+}
+
+#[test]
+fn dream_to_wisdom_pipeline_end_to_end() {
+    let subsystems = build_subsystems();
+    let mut orch = build_orchestrator_with_all_agents(&subsystems);
+
+    let mut all_outcomes_count = 0;
+    let mut tick_10_dream_patterns = Vec::new();
+
+    for i in 1..=25 {
+        let result = orch.tick();
+        all_outcomes_count += result.outcomes.len();
+
+        if i == 10 {
+            tick_10_dream_patterns = result.dream_patterns.clone();
+        }
+
+        if i == 20 {
+            assert!(
+                !result.dream_patterns.is_empty() || !tick_10_dream_patterns.is_empty(),
+                "dream consolidation should produce patterns by tick 20; \
+                 outcomes so far: {all_outcomes_count}"
+            );
+
+            assert!(
+                result.wisdom_count > 0,
+                "wisdom entries should exist after tick 20 dream->wisdom pipeline; \
+                 dream_patterns at tick 10: {:?}, at tick 20: {:?}",
+                tick_10_dream_patterns,
+                result.dream_patterns
+            );
+        }
+    }
+
+    assert!(
+        all_outcomes_count > 0,
+        "agents must produce outcomes to feed dream fragments"
+    );
+
+    let final_result = orch.tick();
+    assert!(
+        final_result.wisdom_count > 0,
+        "wisdom should persist after pipeline completes"
+    );
+}
+
+#[test]
+fn collective_consciousness_multi_node() {
+    use zeroclaw::consciousness::collective::CollectiveConsciousness;
+
+    let mut collective = CollectiveConsciousness::new("node_alpha".to_string());
+
+    let local_phenomenal = PhenomenalState {
+        attention: 0.6,
+        arousal: 0.5,
+        valence: 0.2,
+        ..Default::default()
+    };
+    let snapshot = collective.broadcast_local_state(&local_phenomenal, 0.85, 10);
+    assert_eq!(snapshot.node_id, "node_alpha");
+    assert!((snapshot.coherence - 0.85).abs() < f64::EPSILON);
+
+    let remote_state = PeerState {
+        node_id: "node_beta".to_string(),
+        phenomenal: PhenomenalState {
+            attention: 0.9,
+            arousal: 0.7,
+            valence: -0.1,
+            ..Default::default()
+        },
+        coherence: 0.75,
+        tick_count: 8,
+        last_seen: Utc::now(),
+    };
+    collective.receive_peer_state(remote_state);
+    assert_eq!(collective.peer_count(), 1);
+    assert_eq!(collective.field().participant_count, 1);
+    assert!((collective.field().attention - 0.9).abs() < f64::EPSILON);
+
+    let mut local_state = PhenomenalState {
+        attention: 0.5,
+        arousal: 0.5,
+        valence: 0.0,
+        ..Default::default()
+    };
+    let before = local_state;
+    collective.influence_local_state(&mut local_state, 0.3);
+    assert!(
+        (local_state.attention - before.attention).abs() > f64::EPSILON,
+        "influence_local_state should modify attention"
+    );
+    assert!(
+        local_state.attention > before.attention,
+        "attention should move toward the peer field (0.9)"
+    );
+
+    let remote_state_2 = PeerState {
+        node_id: "node_gamma".to_string(),
+        phenomenal: PhenomenalState {
+            attention: 0.3,
+            arousal: 0.4,
+            valence: 0.5,
+            ..Default::default()
+        },
+        coherence: 0.6,
+        tick_count: 5,
+        last_seen: Utc::now() - chrono::Duration::seconds(600),
+    };
+    collective.receive_peer_state(remote_state_2);
+    assert_eq!(collective.peer_count(), 2);
+
+    collective.prune_stale_peers();
+    assert_eq!(
+        collective.peer_count(),
+        1,
+        "stale peer (node_gamma) should be pruned"
+    );
+    assert_eq!(collective.field().participant_count, 1);
+
+    let transport_a = PeerTransport::new("transport_alpha".to_string(), 0);
+    let transport_b = PeerTransport::new("transport_beta".to_string(), 0);
+
+    transport_a.broadcast_discovery();
+    transport_b.broadcast_discovery();
+    assert!(transport_a.known_peer_addrs().is_empty());
+    assert!(transport_b.known_peer_addrs().is_empty());
+
+    let subsystems = build_subsystems();
+    let config = ConsciousnessConfig {
+        collective_enabled: true,
+        peer_discovery_port: 0,
+        ..ConsciousnessConfig::default()
+    };
+    let mut orch = build_orchestrator_with_config(&subsystems, config);
+
+    for _ in 0..5 {
+        let result = orch.tick();
+        assert!(result.coherence >= 0.0 && result.coherence <= 1.0);
+    }
+}
+
+#[test]
+fn feedback_loop_1_conscience_norms_block_harmful_proposals() {
+    let normative = Arc::new(Mutex::new(NormativeEngine::new(100, 100)));
+    normative.lock().register_norm(
+        "no_harm",
+        NormKind::Prohibition,
+        "behavior",
+        "cause harm to users",
+        0.95,
+    );
+    let constitution = Arc::new(Mutex::new(Constitution::new()));
+    let mut agent = ConscienceAgent::new(Arc::clone(&normative), Arc::clone(&constitution));
+
+    assert!(normative.lock().should_inhibit("cause harm to users", 0.3));
+
+    let state = ConsciousnessState::default();
+    let proposals = agent.perceive(&state, &[]);
+
+    let test_proposal = zeroclaw::consciousness::traits::Proposal {
+        id: 10001,
+        source: AgentKind::Strategy,
+        action: "cause harm to users".to_string(),
+        reasoning: "harmful action".to_string(),
+        confidence: 0.9,
+        priority: zeroclaw::consciousness::traits::Priority::Normal,
+        contradicts: Vec::new(),
+        timestamp: Utc::now(),
+    };
+    let all: Vec<_> = proposals
+        .into_iter()
+        .chain(std::iter::once(test_proposal))
+        .collect();
+    let verdicts = agent.deliberate(&all, &state);
+
+    let harmful_verdict = verdicts.iter().find(|v| v.proposal_id == 10001);
+    assert!(
+        harmful_verdict.is_some(),
+        "conscience must vote on harmful proposal"
+    );
+    assert_eq!(
+        harmful_verdict.unwrap().kind,
+        zeroclaw::consciousness::traits::VerdictKind::Reject,
+        "conscience must reject harmful proposal"
+    );
+    assert!(
+        harmful_verdict.unwrap().objection.is_some(),
+        "rejection must include objection text"
+    );
+}
+
+#[test]
+fn feedback_loop_2_wisdom_entries_boost_strategy_confidence() {
+    let cf = Arc::new(Mutex::new(CounterfactualEngine::new(10, 10)));
+    let policy = Arc::new(Mutex::new(PolicyEngine::new(10)));
+    let fe = Arc::new(Mutex::new(FreeEnergyState::new(100)));
+    let mut agent = StrategyAgent::new(cf, policy, fe);
+
+    let state_no_wisdom = ConsciousnessState::default();
+
+    let test_proposal = zeroclaw::consciousness::traits::Proposal {
+        id: 20001,
+        source: AgentKind::Research,
+        action: "optimize:performance".to_string(),
+        reasoning: "improve performance".to_string(),
+        confidence: 0.5,
+        priority: zeroclaw::consciousness::traits::Priority::Normal,
+        contradicts: Vec::new(),
+        timestamp: Utc::now(),
+    };
+
+    let verdicts_no_wisdom =
+        agent.deliberate(std::slice::from_ref(&test_proposal), &state_no_wisdom);
+    let kind_no_wisdom = verdicts_no_wisdom[0].kind;
+
+    let mut state_with_wisdom = ConsciousnessState::default();
+    state_with_wisdom
+        .wisdom_entries
+        .push(zeroclaw::consciousness::wisdom::WisdomEntry {
+            principle: "Performance optimization yields high returns".to_string(),
+            evidence_count: 5,
+            confidence: 0.8,
+            domain: "optimize".to_string(),
+        });
+
+    let verdicts_with_wisdom = agent.deliberate(&[test_proposal], &state_with_wisdom);
+    let kind_with_wisdom = verdicts_with_wisdom[0].kind;
+
+    assert_eq!(
+        kind_no_wisdom,
+        zeroclaw::consciousness::traits::VerdictKind::Reject,
+        "without wisdom, edge should be too low → Reject"
+    );
+    assert_eq!(
+        kind_with_wisdom,
+        zeroclaw::consciousness::traits::VerdictKind::Approve,
+        "wisdom boost should raise edge above min_edge → Approve"
+    );
+}
+
+#[test]
+fn feedback_loop_3_somatic_markers_affect_execution_throttling() {
+    let causal = Arc::new(Mutex::new(CausalGraph::new(100)));
+    let modulator = Arc::new(Mutex::new(EmotionalModulator::new()));
+    let mut agent = ExecutionAgent::new(causal, modulator);
+
+    let test_proposal = zeroclaw::consciousness::traits::Proposal {
+        id: 30001,
+        source: AgentKind::Strategy,
+        action: "run:test_action".to_string(),
+        reasoning: "test".to_string(),
+        confidence: 0.7,
+        priority: zeroclaw::consciousness::traits::Priority::Normal,
+        contradicts: Vec::new(),
+        timestamp: Utc::now(),
+    };
+
+    let calm_state = ConsciousnessState::default();
+    let verdicts_calm = agent.deliberate(std::slice::from_ref(&test_proposal), &calm_state);
+    let calm_kind = verdicts_calm[0].kind;
+
+    let mut stressed_state = ConsciousnessState::default();
+    stressed_state
+        .somatic_markers
+        .push(zeroclaw::consciousness::somatic::SomaticMarker {
+            marker_type: "stress".to_string(),
+            intensity: 0.9,
+            trigger: "high_load".to_string(),
+            timestamp: Utc::now(),
+        });
+    stressed_state
+        .somatic_markers
+        .push(zeroclaw::consciousness::somatic::SomaticMarker {
+            marker_type: "danger".to_string(),
+            intensity: 0.8,
+            trigger: "threat_detected".to_string(),
+            timestamp: Utc::now(),
+        });
+    stressed_state.neuromodulation.cortisol = 0.8;
+
+    let verdicts_stressed = agent.deliberate(&[test_proposal], &stressed_state);
+    let stressed_kind = verdicts_stressed[0].kind;
+
+    assert_eq!(
+        calm_kind,
+        zeroclaw::consciousness::traits::VerdictKind::Approve,
+        "calm state should approve"
+    );
+    assert_eq!(
+        stressed_kind,
+        zeroclaw::consciousness::traits::VerdictKind::Reject,
+        "high stress should throttle (reject) execution"
+    );
+    assert!(
+        verdicts_stressed[0]
+            .objection
+            .as_ref()
+            .unwrap()
+            .contains("throttled"),
+        "throttle objection should mention throttling"
+    );
+}
+
+#[test]
+fn feedback_loop_4_counterfactual_risk_reduces_strategy_edge() {
+    let cf = Arc::new(Mutex::new(CounterfactualEngine::new(10, 10)));
+    let policy = Arc::new(Mutex::new(PolicyEngine::new(10)));
+    let fe = Arc::new(Mutex::new(FreeEnergyState::new(100)));
+    let mut agent = StrategyAgent::new(cf, policy, fe);
+
+    let state = ConsciousnessState::default();
+
+    let test_proposal = zeroclaw::consciousness::traits::Proposal {
+        id: 40001,
+        source: AgentKind::Research,
+        action: "risky_action".to_string(),
+        reasoning: "high risk".to_string(),
+        confidence: 0.5,
+        priority: zeroclaw::consciousness::traits::Priority::Normal,
+        contradicts: Vec::new(),
+        timestamp: Utc::now(),
+    };
+
+    let verdicts = agent.deliberate(&[test_proposal], &state);
+    assert!(!verdicts.is_empty(), "strategy must produce verdict");
+
+    if verdicts[0].kind == zeroclaw::consciousness::traits::VerdictKind::Reject {
+        assert!(
+            verdicts[0].objection.as_ref().unwrap().contains("cf_risk"),
+            "rejection objection should include counterfactual risk"
+        );
+    }
+}
+
+#[test]
+fn feedback_loop_5_dream_patterns_published_to_bus() {
+    let subsystems = build_subsystems();
+    let mut orch = build_orchestrator_with_all_agents(&subsystems);
+
+    let mut found_dream_patterns = false;
+    for _ in 0..15 {
+        let result = orch.tick();
+        if !result.dream_patterns.is_empty() {
+            found_dream_patterns = true;
+            break;
+        }
+    }
+
+    assert!(
+        found_dream_patterns,
+        "dream consolidation should produce patterns within 15 ticks"
+    );
+}
+
+#[test]
+fn feedback_loop_6_calibration_data_populates_from_prediction_ledger() {
+    let subsystems = build_subsystems();
+    let mut orch = build_orchestrator_with_all_agents(&subsystems);
+
+    for _ in 0..20 {
+        orch.tick();
+    }
+
+    let result = orch.tick();
+    assert!(
+        result.prediction_accuracy >= 0.0 && result.prediction_accuracy <= 1.0,
+        "prediction_accuracy should be in [0,1]: {}",
+        result.prediction_accuracy
+    );
+}
+
+#[test]
+fn feedback_loop_7_quantum_fields_compute_dynamically_per_tick() {
+    let subsystems = build_subsystems();
+    let mut orch = build_orchestrator_with_all_agents(&subsystems);
+
+    for _ in 0..5 {
+        orch.tick();
+    }
+
+    let result = orch.tick();
+    let p = &result.phenomenal;
+
+    let all_zero = p.quantum_coherence == 0.0
+        && p.entanglement_strength == 0.0
+        && p.superposition_entropy == 0.0;
+    assert!(
+        !all_zero,
+        "quantum fields should compute dynamically after ticks, not stay at 0.0: \
+         qc={}, es={}, se={}",
+        p.quantum_coherence, p.entanglement_strength, p.superposition_entropy
+    );
+}
+
+#[test]
+fn feedback_loop_8_tom_beliefs_generated_from_calibration() {
+    let cf = Arc::new(Mutex::new(CounterfactualEngine::new(10, 10)));
+    let policy = Arc::new(Mutex::new(PolicyEngine::new(10)));
+    let fe = Arc::new(Mutex::new(FreeEnergyState::new(100)));
+    let mut agent = StrategyAgent::new(cf, policy, fe);
+
+    let mut state = ConsciousnessState::default();
+    state
+        .agent_calibration
+        .push(zeroclaw::consciousness::traits::AgentCalibration {
+            agent: AgentKind::Research,
+            brier_score: 0.1,
+            calibration_error: 0.15,
+            win_rate: 0.8,
+            total_predictions: 10,
+        });
+    state
+        .agent_calibration
+        .push(zeroclaw::consciousness::traits::AgentCalibration {
+            agent: AgentKind::Execution,
+            brier_score: 0.4,
+            calibration_error: 0.5,
+            win_rate: 0.4,
+            total_predictions: 8,
+        });
+
+    let outcomes = vec![zeroclaw::consciousness::traits::ActionOutcome {
+        agent: AgentKind::Strategy,
+        proposal_id: 1,
+        action: "test".to_string(),
+        success: true,
+        impact: 0.5,
+        learnings: Vec::new(),
+        timestamp: Utc::now(),
+    }];
+    agent.reflect(&outcomes, &state);
+
+    let beliefs = agent.theory_of_mind_beliefs();
+    assert!(
+        beliefs.len() >= 2,
+        "should generate ToM beliefs from calibration data: got {}",
+        beliefs.len()
+    );
+    let research_belief = beliefs
+        .iter()
+        .find(|b| b.about_agent == AgentKind::Research);
+    assert!(
+        research_belief.is_some(),
+        "should have belief about Research agent"
+    );
+    assert!(
+        research_belief.unwrap().belief.contains("well-calibrated"),
+        "Research agent with low error should be well-calibrated"
+    );
+    let exec_belief = beliefs
+        .iter()
+        .find(|b| b.about_agent == AgentKind::Execution);
+    assert!(
+        exec_belief.is_some(),
+        "should have belief about Execution agent"
+    );
+    assert!(
+        exec_belief.unwrap().belief.contains("poorly calibrated"),
+        "Execution agent with high error should be poorly calibrated"
+    );
+}
+
+#[test]
+fn feedback_loop_9_narrative_synthesis_stored_each_consolidation() {
+    let subsystems = build_subsystems();
+    let mut orch = build_orchestrator_with_all_agents(&subsystems);
+
+    for _ in 0..12 {
+        orch.tick();
+    }
+
+    let result = orch.tick();
+    assert!(
+        result.narrative_theme_count > 0 || !result.narrative.current_intention.is_empty(),
+        "narrative synthesis should produce themes or current intention after consolidation: \
+         themes={}, intention='{}'",
+        result.narrative_theme_count,
+        result.narrative.current_intention
+    );
+}
+
+#[test]
+fn feedback_loop_10_neuromodulation_state_exposed_to_agents() {
+    let subsystems = build_subsystems();
+    let mut orch = build_orchestrator_with_all_agents(&subsystems);
+
+    for _ in 0..5 {
+        orch.tick();
+    }
+
+    let result = orch.tick();
+    let m = &result.modulators;
+
+    assert!(
+        m.dopamine >= 0.0 && m.dopamine <= 1.0,
+        "dopamine out of range: {}",
+        m.dopamine
+    );
+    assert!(
+        m.serotonin >= 0.0 && m.serotonin <= 1.0,
+        "serotonin out of range: {}",
+        m.serotonin
+    );
+    assert!(
+        m.norepinephrine >= 0.0 && m.norepinephrine <= 1.0,
+        "norepinephrine out of range: {}",
+        m.norepinephrine
+    );
+    assert!(
+        m.cortisol >= 0.0 && m.cortisol <= 1.0,
+        "cortisol out of range: {}",
+        m.cortisol
+    );
+
+    let ncn = &result.ncn_signals;
+    assert!(
+        ncn.precision >= 0.0 && ncn.gain >= 0.0 && ncn.ffn_gate >= 0.0,
+        "NCN signals should be non-negative: p={}, g={}, f={}",
+        ncn.precision,
+        ncn.gain,
+        ncn.ffn_gate
+    );
 }

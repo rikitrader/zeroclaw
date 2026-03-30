@@ -55,6 +55,10 @@ impl Memory for NoneMemory {
         Ok(false)
     }
 
+    async fn clear(&self, _category: Option<&MemoryCategory>) -> anyhow::Result<usize> {
+        Ok(0)
+    }
+
     async fn count(&self) -> anyhow::Result<usize> {
         Ok(0)
     }

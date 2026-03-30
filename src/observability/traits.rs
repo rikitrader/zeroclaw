@@ -57,6 +57,16 @@ pub enum ObserverEvent {
         to: String,
         balance_cents: i64,
     },
+    /// A consciousness orchestrator tick completed.
+    ConsciousnessTick {
+        tick_count: u64,
+        coherence: f64,
+        proposals_generated: usize,
+        proposals_approved: usize,
+        proposals_vetoed: usize,
+        debate_rounds_used: usize,
+        duration: Duration,
+    },
 }
 
 /// Numeric metrics

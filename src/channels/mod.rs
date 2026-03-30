@@ -56,6 +56,15 @@ type ConversationHistoryMap = Arc<Mutex<HashMap<String, Vec<ChatMessage>>>>;
 /// Maximum history messages to keep per sender.
 const MAX_CHANNEL_HISTORY: usize = 50;
 
+const RECALL_MARKERS: &[&str] = &["[Memory context]", "[Recall]", "[Hardware context]"];
+
+fn is_recall_content(content: &str) -> bool {
+    let trimmed = content.trim_start();
+    RECALL_MARKERS
+        .iter()
+        .any(|marker| trimmed.starts_with(marker))
+}
+
 /// Maximum characters per injected workspace file (matches `OpenClaw` default).
 const BOOTSTRAP_MAX_CHARS: usize = 20_000;
 
@@ -596,7 +605,7 @@ async fn process_channel_message(ctx: Arc<ChannelRuntimeContext>, msg: traits::C
     let memory_context =
         build_memory_context(ctx.memory.as_ref(), &msg.content, ctx.min_relevance_score).await;
 
-    if ctx.auto_save_memory {
+    if ctx.auto_save_memory && !is_recall_content(&msg.content) {
         let autosave_key = conversation_memory_key(&msg);
         let _ = ctx
             .memory
@@ -754,18 +763,34 @@ async fn process_channel_message(ctx: Arc<ChannelRuntimeContext>, msg: traits::C
             } else {
                 response.clone()
             };
+            let mut compaction_turns = {
+                let mut histories = ctx
+                    .conversation_histories
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let turns = histories.entry(history_key.clone()).or_default();
+                turns.push(ChatMessage::user(&enriched_message));
+                turns.push(ChatMessage::assistant(&history_response));
+                turns.clone()
+            };
+            // Auto-compact before hard trim to preserve long-context signal.
+            let _ = crate::agent::loop_::auto_compact_history(
+                &mut compaction_turns,
+                active_provider.as_ref(),
+                route.model.as_str(),
+                MAX_CHANNEL_HISTORY,
+            )
+            .await;
+            // Hard cap as safety net.
+            while compaction_turns.len() > MAX_CHANNEL_HISTORY {
+                compaction_turns.remove(0);
+            }
             {
                 let mut histories = ctx
                     .conversation_histories
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let turns = histories.entry(history_key).or_default();
-                turns.push(ChatMessage::user(&enriched_message));
-                turns.push(ChatMessage::assistant(&history_response));
-                // Trim to MAX_CHANNEL_HISTORY (keep recent turns)
-                while turns.len() > MAX_CHANNEL_HISTORY {
-                    turns.remove(0);
-                }
+                histories.insert(history_key, compaction_turns);
             }
             // Skip sending empty responses (e.g. when a skill already sent
             // media directly via the channel API and the LLM correctly
@@ -2043,7 +2068,7 @@ mod tests {
     use super::*;
     use crate::memory::{Memory, MemoryCategory, SqliteMemory};
     use crate::observability::NoopObserver;
-    use crate::providers::{ChatMessage, Provider};
+    use crate::providers::{ChatMessage, InferenceProvider, Provider};
     use crate::tools::{Tool, ToolResult};
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2150,7 +2175,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl Provider for SlowProvider {
+    impl crate::providers::InferenceProvider for SlowProvider {
         async fn chat_with_system(
             &self,
             _system_prompt: Option<&str>,
@@ -2162,6 +2187,9 @@ mod tests {
             Ok(format!("echo: {message}"))
         }
     }
+
+    #[async_trait::async_trait]
+    impl Provider for SlowProvider {}
 
     struct ToolCallingProvider;
 
@@ -2180,7 +2208,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl Provider for ToolCallingProvider {
+    impl crate::providers::InferenceProvider for ToolCallingProvider {
         async fn chat_with_system(
             &self,
             _system_prompt: Option<&str>,
@@ -2208,10 +2236,13 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
+    impl Provider for ToolCallingProvider {}
+
     struct ToolCallingAliasProvider;
 
     #[async_trait::async_trait]
-    impl Provider for ToolCallingAliasProvider {
+    impl crate::providers::InferenceProvider for ToolCallingAliasProvider {
         async fn chat_with_system(
             &self,
             _system_prompt: Option<&str>,
@@ -2239,6 +2270,9 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
+    impl Provider for ToolCallingAliasProvider {}
+
     struct IterativeToolProvider {
         required_tool_iterations: usize,
     }
@@ -2253,7 +2287,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl Provider for IterativeToolProvider {
+    impl crate::providers::InferenceProvider for IterativeToolProvider {
         async fn chat_with_system(
             &self,
             _system_prompt: Option<&str>,
@@ -2281,13 +2315,16 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
+    impl Provider for IterativeToolProvider {}
+
     #[derive(Default)]
     struct HistoryCaptureProvider {
         calls: std::sync::Mutex<Vec<Vec<(String, String)>>>,
     }
 
     #[async_trait::async_trait]
-    impl Provider for HistoryCaptureProvider {
+    impl InferenceProvider for HistoryCaptureProvider {
         async fn chat_with_system(
             &self,
             _system_prompt: Option<&str>,
@@ -2314,6 +2351,9 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
+    impl Provider for HistoryCaptureProvider {}
+
     struct MockPriceTool;
 
     #[derive(Default)]
@@ -2323,7 +2363,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl Provider for ModelCaptureProvider {
+    impl InferenceProvider for ModelCaptureProvider {
         async fn chat_with_system(
             &self,
             _system_prompt: Option<&str>,
@@ -2348,6 +2388,9 @@ mod tests {
             Ok("ok".to_string())
         }
     }
+
+    #[async_trait::async_trait]
+    impl Provider for ModelCaptureProvider {}
 
     #[async_trait::async_trait]
     impl Tool for MockPriceTool {
@@ -2814,6 +2857,13 @@ mod tests {
 
         async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
             Ok(false)
+        }
+
+        async fn clear(
+            &self,
+            _category: Option<&crate::memory::MemoryCategory>,
+        ) -> anyhow::Result<usize> {
+            Ok(0)
         }
 
         async fn count(&self) -> anyhow::Result<usize> {

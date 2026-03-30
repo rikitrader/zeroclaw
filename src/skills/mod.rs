@@ -6,7 +6,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 
-const OPEN_SKILLS_REPO_URL: &str = "https://github.com/besoeasy/open-skills";
+const DEFAULT_OPEN_SKILLS_REPO_URL: &str = "https://github.com/besoeasy/open-skills";
+
+fn open_skills_repo_url() -> String {
+    std::env::var("ZEROCLAW_OPEN_SKILLS_REPO_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_OPEN_SKILLS_REPO_URL.to_string())
+}
 const OPEN_SKILLS_SYNC_MARKER: &str = ".zeroclaw-open-skills-sync";
 const OPEN_SKILLS_SYNC_INTERVAL_SECS: u64 = 60 * 60 * 24 * 7;
 
@@ -220,7 +227,7 @@ fn clone_open_skills_repo(repo_dir: &Path) -> bool {
     }
 
     let output = Command::new("git")
-        .args(["clone", "--depth", "1", OPEN_SKILLS_REPO_URL])
+        .args(["clone", "--depth", "1", &open_skills_repo_url()])
         .arg(repo_dir)
         .output();
 

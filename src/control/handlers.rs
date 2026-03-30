@@ -37,13 +37,7 @@ fn check_auth(headers: &HeaderMap, state: &AppState) -> Option<(StatusCode, Json
     None
 }
 
-pub async fn handle_bots_list(
-    headers: HeaderMap,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    if let Some(err) = check_auth(&headers, &state) {
-        return err;
-    }
+pub async fn handle_bots_list(State(state): State<AppState>) -> impl IntoResponse {
     let Some(ref store) = state.control_store else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -192,6 +186,11 @@ pub async fn handle_heartbeat(
             .and_then(|v| v.as_i64())
             .unwrap_or(0),
         registered_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        workspace_dir: body
+            .get("workspace_dir")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
     };
     if let Err(e) = store.upsert_bot(&bot) {
         return (
@@ -375,13 +374,9 @@ pub async fn handle_command_ack(
 }
 
 pub async fn handle_commands_list(
-    headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    if let Some(err) = check_auth(&headers, &state) {
-        return err;
-    }
     let Some(ref store) = state.control_store else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -468,13 +463,9 @@ pub async fn handle_approval_action(
 }
 
 pub async fn handle_approvals_list(
-    headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    if let Some(err) = check_auth(&headers, &state) {
-        return err;
-    }
     let Some(ref store) = state.control_store else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -499,13 +490,9 @@ pub async fn handle_approvals_list(
 }
 
 pub async fn handle_audit_log(
-    headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    if let Some(err) = check_auth(&headers, &state) {
-        return err;
-    }
     let Some(ref store) = state.control_store else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -529,13 +516,9 @@ pub async fn handle_audit_log(
 }
 
 pub async fn handle_events_list(
-    headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    if let Some(err) = check_auth(&headers, &state) {
-        return err;
-    }
     let Some(ref store) = state.control_store else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -559,32 +542,7 @@ pub async fn handle_events_list(
     }
 }
 
-pub async fn handle_events_stream(
-    headers: HeaderMap,
-    Query(params): Query<HashMap<String, String>>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    if state.pairing.require_pairing() {
-        let header_token = headers
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .strip_prefix("Bearer ")
-            .unwrap_or("");
-        let query_token = params.get("token").map(|s| s.as_str()).unwrap_or("");
-        let token = if header_token.is_empty() {
-            query_token
-        } else {
-            header_token
-        };
-        if !state.pairing.is_authenticated(token) {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Unauthorized"})),
-            )
-                .into_response();
-        }
-    }
+pub async fn handle_events_stream(State(state): State<AppState>) -> impl IntoResponse {
     let Some(ref tx) = state.control_events_tx else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -602,13 +560,7 @@ pub async fn handle_events_stream(
         .into_response()
 }
 
-pub async fn handle_control_metrics(
-    headers: HeaderMap,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    if let Some(err) = check_auth(&headers, &state) {
-        return err.into_response();
-    }
+pub async fn handle_control_metrics(State(state): State<AppState>) -> impl IntoResponse {
     let Some(ref store) = state.control_store else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,

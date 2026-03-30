@@ -22,7 +22,10 @@ use crate::util::truncate_with_ellipsis;
 use anyhow::{Context, Result};
 use axum::{
     body::Bytes,
-    extract::{ConnectInfo, Query, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        ConnectInfo, Query, State,
+    },
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post},
@@ -44,8 +47,22 @@ fn consciousness_snapshot_arc() -> Arc<Mutex<Option<ConsciousnessSnapshot>>> {
     Arc::clone(CONSCIOUSNESS_SNAPSHOT.get_or_init(|| Arc::new(Mutex::new(None))))
 }
 
+static CONSCIOUSNESS_TX: OnceLock<tokio::sync::broadcast::Sender<String>> = OnceLock::new();
+
+fn consciousness_broadcast_tx() -> tokio::sync::broadcast::Sender<String> {
+    CONSCIOUSNESS_TX
+        .get_or_init(|| {
+            let (tx, _) = tokio::sync::broadcast::channel(64);
+            tx
+        })
+        .clone()
+}
+
 pub fn update_consciousness_snapshot(snap: ConsciousnessSnapshot) {
     let arc = consciousness_snapshot_arc();
+    if let Ok(json) = serde_json::to_string(&snap) {
+        let _ = CONSCIOUSNESS_TX.get().map(|tx| tx.send(json));
+    }
     *arc.lock() = Some(snap);
 }
 
@@ -289,6 +306,8 @@ pub struct ConsciousnessSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub somatic_marker_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub theory_of_mind_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub collective_field: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metacognition_observation_count: Option<usize>,
@@ -300,6 +319,24 @@ pub struct ConsciousnessSnapshot {
     pub metacognition_observations: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metacognition_adjustments: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub narrative_theme_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prediction_accuracy: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enactive_success_rate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modulators: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ncn_signals: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub neuro_history: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exploration_drive: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conservation_drive: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stress_level: Option<f64>,
 }
 
 /// Shared state for all axum handlers
@@ -325,6 +362,7 @@ pub struct AppState {
     pub control_store: Option<Arc<crate::control::ControlStore>>,
     pub control_events_tx: Option<tokio::sync::broadcast::Sender<String>>,
     pub consciousness_snapshot: Arc<Mutex<Option<ConsciousnessSnapshot>>>,
+    pub consciousness_tx: tokio::sync::broadcast::Sender<String>,
 }
 
 /// Run the HTTP gateway using axum with proper HTTP/1.1 compliance.
@@ -492,6 +530,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
     println!("  GET  /health    — health check");
     println!("  GET  /metrics   — Prometheus metrics");
     println!("  GET  /api/consciousness — consciousness status");
+    println!("  GET  /api/consciousness/brain_scan — NCN neuromodulatory heatmap");
     if let Some(code) = pairing.pairing_code() {
         println!();
         println!("  🔐 PAIRING REQUIRED — use this one-time code:");
@@ -543,10 +582,39 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         control_store,
         control_events_tx,
         consciousness_snapshot: consciousness_snapshot_arc(),
+        consciousness_tx: consciousness_broadcast_tx(),
     };
 
     // Build router with middleware
     let app = Router::new()
+        .route("/", get(dashboard::handle_dashboard))
+        .route("/api/status", get(dashboard::handle_api_status))
+        .route("/api/channels", get(dashboard::handle_api_channels))
+        .route("/api/system", get(dashboard::handle_api_system))
+        .route(
+            "/api/control/bots",
+            get(crate::control::handlers::handle_bots_list),
+        )
+        .route(
+            "/api/control/commands",
+            get(crate::control::handlers::handle_commands_list),
+        )
+        .route(
+            "/api/control/approvals",
+            get(crate::control::handlers::handle_approvals_list),
+        )
+        .route(
+            "/api/control/approvals/{id}",
+            post(crate::control::handlers::handle_approval_action),
+        )
+        .route(
+            "/api/control/audit",
+            get(crate::control::handlers::handle_audit_log),
+        )
+        .route(
+            "/api/control/events/stream",
+            get(crate::control::handlers::handle_events_stream),
+        )
         .route("/health", get(handle_health))
         .route("/metrics", get(handle_metrics))
         .route("/pair", post(handle_pair))
@@ -562,6 +630,12 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route(
             "/api/consciousness/metacognition",
             get(handle_consciousness_metacognition),
+        )
+        .route("/api/consciousness/brain_scan", get(handle_brain_scan))
+        .route("/api/consciousness/sync", post(handle_consciousness_sync))
+        .route(
+            "/api/consciousness/stream",
+            get(handle_consciousness_stream),
         )
         .route(
             "/api/control/metrics",
@@ -592,7 +666,14 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
 async fn handle_consciousness_status(State(state): State<AppState>) -> impl IntoResponse {
     let guard = state.consciousness_snapshot.lock();
     match guard.as_ref() {
-        Some(snap) => (StatusCode::OK, Json(serde_json::to_value(snap).unwrap())).into_response(),
+        Some(snap) => match serde_json::to_value(snap) {
+            Ok(val) => (StatusCode::OK, Json(val)).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("serialization failed: {e}")})),
+            )
+                .into_response(),
+        },
         None => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({"error": "consciousness subsystem not active"})),
@@ -613,6 +694,7 @@ async fn handle_consciousness_state(State(state): State<AppState>) -> impl IntoR
                 "flow_state": snap.flow_state,
                 "wisdom_count": snap.wisdom_count,
                 "somatic_marker_count": snap.somatic_marker_count,
+                "theory_of_mind_count": snap.theory_of_mind_count,
                 "collective_field": snap.collective_field,
                 "metacognition": {
                     "observation_count": snap.metacognition_observation_count,
@@ -666,6 +748,192 @@ async fn handle_consciousness_metacognition(State(state): State<AppState>) -> im
             Json(serde_json::json!({"error": "consciousness subsystem not active"})),
         )
             .into_response(),
+    }
+}
+
+/// GET /api/consciousness/brain_scan — NCN neuromodulatory heatmap data
+async fn handle_brain_scan(State(state): State<AppState>) -> impl IntoResponse {
+    let guard = state.consciousness_snapshot.lock();
+    match guard.as_ref() {
+        Some(snap) => {
+            let history = snap.neuro_history.clone().unwrap_or(serde_json::json!([]));
+
+            let heatmap_matrix: Vec<serde_json::Value> = if let Some(arr) = history.as_array() {
+                arr.iter()
+                    .filter_map(|entry| {
+                        let m = entry.get("modulators")?;
+                        Some(serde_json::json!({
+                            "tick": entry.get("tick"),
+                            "values": [
+                                m.get("dopamine"),
+                                m.get("serotonin"),
+                                m.get("norepinephrine"),
+                                m.get("cortisol"),
+                            ]
+                        }))
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
+
+            let body = serde_json::json!({
+                "current": {
+                    "modulators": snap.modulators,
+                    "ncn_signals": snap.ncn_signals,
+                    "phenomenal": snap.phenomenal,
+                    "drives": {
+                        "exploration": snap.exploration_drive,
+                        "conservation": snap.conservation_drive,
+                        "stress": snap.stress_level,
+                    }
+                },
+                "history": history,
+                "heatmap": {
+                    "labels": ["dopamine", "serotonin", "norepinephrine", "cortisol"],
+                    "matrix": heatmap_matrix,
+                    "tick_count": snap.tick_count,
+                },
+                "coherence": snap.coherence,
+            });
+            (StatusCode::OK, Json(body)).into_response()
+        }
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "consciousness subsystem not active"})),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /api/consciousness/sync — push consciousness tick data from external source
+async fn handle_consciousness_sync(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<ConsciousnessSyncRequest>, axum::extract::rejection::JsonRejection>,
+) -> impl IntoResponse {
+    if state.pairing.require_pairing() {
+        let auth = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let token = auth.strip_prefix("Bearer ").unwrap_or("");
+        if !state.pairing.is_authenticated(token) {
+            let err = serde_json::json!({
+                "error": "Unauthorized — pair first via POST /pair, then send Authorization: Bearer <token>"
+            });
+            return (StatusCode::UNAUTHORIZED, Json(err));
+        }
+    }
+
+    let Json(req) = match body {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!("consciousness sync JSON parse error: {e}");
+            let err = serde_json::json!({
+                "error": "Invalid JSON body"
+            });
+            return (StatusCode::BAD_REQUEST, Json(err));
+        }
+    };
+
+    let phenomenal_value = req.phenomenal.as_ref().map(|p| {
+        serde_json::json!({
+            "attention": p.attention,
+            "arousal": p.arousal,
+            "valence": p.valence,
+        })
+    });
+
+    let snap = ConsciousnessSnapshot {
+        enabled: true,
+        coherence: req.coherence,
+        tick_count: req.tick_number,
+        last_tick_proposals: req.proposals_generated,
+        last_tick_approved: req.proposals_approved,
+        last_tick_vetoed: req.proposals_vetoed,
+        last_tick_contradictions: 0,
+        phenomenal: phenomenal_value,
+        flow_state: None,
+        wisdom_count: None,
+        somatic_marker_count: None,
+        theory_of_mind_count: None,
+        collective_field: None,
+        metacognition_observation_count: None,
+        metacognition_adjustment_count: None,
+        collective_peer_states: None,
+        metacognition_observations: None,
+        metacognition_adjustments: None,
+        narrative_theme_count: None,
+        prediction_accuracy: None,
+        enactive_success_rate: None,
+        modulators: None,
+        ncn_signals: None,
+        neuro_history: None,
+        exploration_drive: None,
+        conservation_drive: None,
+        stress_level: None,
+    };
+
+    tracing::info!(
+        agent_id = %req.agent_id,
+        tick = req.tick_number,
+        coherence = req.coherence,
+        "consciousness sync received"
+    );
+
+    *state.consciousness_snapshot.lock() = Some(snap);
+
+    (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+}
+
+/// GET /api/consciousness/stream — WebSocket for real-time consciousness updates
+async fn handle_consciousness_stream(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| consciousness_ws_handler(socket, state))
+}
+
+async fn consciousness_ws_handler(mut socket: WebSocket, state: AppState) {
+    let mut rx = state.consciousness_tx.subscribe();
+
+    let initial = { state.consciousness_snapshot.lock().clone() };
+    if let Some(snap) = initial {
+        if let Ok(json) = serde_json::to_string(&snap) {
+            if socket.send(Message::Text(json.into())).await.is_err() {
+                return;
+            }
+        }
+    }
+
+    loop {
+        tokio::select! {
+            msg = rx.recv() => {
+                match msg {
+                    Ok(json) => {
+                        if socket.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::debug!("consciousness WS client lagged {n} messages");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            msg = socket.recv() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(Message::Ping(data))) => {
+                        if socket.send(Message::Pong(data)).await.is_err() {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }
 
@@ -776,6 +1044,26 @@ fn persist_pairing_tokens(config: &Arc<Mutex<Config>>, pairing: &PairingGuard) -
 #[derive(serde::Deserialize)]
 pub struct WebhookBody {
     pub message: String,
+}
+
+#[derive(serde::Deserialize)]
+struct SyncPhenomenalSnapshot {
+    attention: f64,
+    arousal: f64,
+    valence: f64,
+}
+
+#[derive(serde::Deserialize)]
+struct ConsciousnessSyncRequest {
+    agent_id: String,
+    tick_number: u64,
+    coherence: f64,
+    proposals_generated: usize,
+    proposals_approved: usize,
+    proposals_vetoed: usize,
+    #[allow(dead_code)]
+    debate_rounds_used: usize,
+    phenomenal: Option<SyncPhenomenalSnapshot>,
 }
 
 /// POST /webhook — main webhook endpoint
@@ -1161,6 +1449,7 @@ mod tests {
     use super::*;
     use crate::channels::traits::ChannelMessage;
     use crate::memory::{Memory, MemoryCategory, MemoryEntry};
+    use crate::providers::traits::InferenceProvider;
     use crate::providers::Provider;
     use async_trait::async_trait;
     use axum::http::HeaderValue;
@@ -1227,6 +1516,7 @@ mod tests {
             control_store: None,
             control_events_tx: None,
             consciousness_snapshot: Arc::new(Mutex::new(None)),
+            consciousness_tx: tokio::sync::broadcast::channel(16).0,
         };
 
         let response = handle_metrics(State(state)).await.into_response();
@@ -1271,6 +1561,7 @@ mod tests {
             control_store: None,
             control_events_tx: None,
             consciousness_snapshot: Arc::new(Mutex::new(None)),
+            consciousness_tx: tokio::sync::broadcast::channel(16).0,
         };
 
         let response = handle_metrics(State(state)).await.into_response();
@@ -1512,6 +1803,13 @@ mod tests {
             Ok(false)
         }
 
+        async fn clear(
+            &self,
+            _category: Option<&MemoryCategory>,
+        ) -> anyhow::Result<usize> {
+            Ok(0)
+        }
+
         async fn count(&self) -> anyhow::Result<usize> {
             Ok(0)
         }
@@ -1527,7 +1825,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl Provider for MockProvider {
+    impl InferenceProvider for MockProvider {
         async fn chat_with_system(
             &self,
             _system_prompt: Option<&str>,
@@ -1539,6 +1837,9 @@ mod tests {
             Ok("ok".into())
         }
     }
+
+    #[async_trait]
+    impl Provider for MockProvider {}
 
     #[derive(Default)]
     struct TrackingMemory {
@@ -1587,6 +1888,13 @@ mod tests {
             Ok(false)
         }
 
+        async fn clear(
+            &self,
+            _category: Option<&MemoryCategory>,
+        ) -> anyhow::Result<usize> {
+            Ok(0)
+        }
+
         async fn count(&self) -> anyhow::Result<usize> {
             let size = self.keys.lock().len();
             Ok(size)
@@ -1625,6 +1933,7 @@ mod tests {
             control_store: None,
             control_events_tx: None,
             consciousness_snapshot: Arc::new(Mutex::new(None)),
+            consciousness_tx: tokio::sync::broadcast::channel(16).0,
         };
 
         let mut headers = HeaderMap::new();
@@ -1684,6 +1993,7 @@ mod tests {
             control_store: None,
             control_events_tx: None,
             consciousness_snapshot: Arc::new(Mutex::new(None)),
+            consciousness_tx: tokio::sync::broadcast::channel(16).0,
         };
 
         let headers = HeaderMap::new();
@@ -1752,6 +2062,7 @@ mod tests {
             control_store: None,
             control_events_tx: None,
             consciousness_snapshot: Arc::new(Mutex::new(None)),
+            consciousness_tx: tokio::sync::broadcast::channel(16).0,
         };
 
         let response = handle_webhook(
@@ -1793,6 +2104,7 @@ mod tests {
             control_store: None,
             control_events_tx: None,
             consciousness_snapshot: Arc::new(Mutex::new(None)),
+            consciousness_tx: tokio::sync::broadcast::channel(16).0,
         };
 
         let mut headers = HeaderMap::new();
@@ -1837,6 +2149,7 @@ mod tests {
             control_store: None,
             control_events_tx: None,
             consciousness_snapshot: Arc::new(Mutex::new(None)),
+            consciousness_tx: tokio::sync::broadcast::channel(16).0,
         };
 
         let mut headers = HeaderMap::new();

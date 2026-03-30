@@ -375,12 +375,45 @@ impl Memory for LucidMemory {
         self.local.forget(key).await
     }
 
+    async fn clear(&self, category: Option<&MemoryCategory>) -> anyhow::Result<usize> {
+        self.local.clear(category).await
+    }
+
     async fn count(&self) -> anyhow::Result<usize> {
         self.local.count().await
     }
 
     async fn health_check(&self) -> bool {
         self.local.health_check().await
+    }
+}
+
+#[async_trait]
+impl super::search::SearchableMemory for LucidMemory {
+    async fn search(
+        &self,
+        query: &str,
+        filter: &super::search::SearchFilter,
+        limit: usize,
+    ) -> anyhow::Result<Vec<super::search::SearchResult>> {
+        self.local.search(query, filter, limit).await
+    }
+
+    async fn semantic_search(
+        &self,
+        query: &str,
+        limit: usize,
+        min_score: f64,
+    ) -> anyhow::Result<Vec<super::search::SearchResult>> {
+        self.local.semantic_search(query, limit, min_score).await
+    }
+
+    async fn keyword_search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<super::search::SearchResult>> {
+        self.local.keyword_search(query, limit).await
     }
 }
 

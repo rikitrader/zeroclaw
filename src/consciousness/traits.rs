@@ -3,11 +3,25 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VetoRecord {
+    pub proposal_id: u64,
+    pub action: String,
+    pub conscience_objection: String,
+    pub tick: u64,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PhenomenalState {
     pub attention: f64,
     pub arousal: f64,
     pub valence: f64,
+    #[serde(default)]
+    pub quantum_coherence: f64,
+    #[serde(default)]
+    pub entanglement_strength: f64,
+    #[serde(default)]
+    pub superposition_entropy: f64,
 }
 
 impl Default for PhenomenalState {
@@ -16,7 +30,32 @@ impl Default for PhenomenalState {
             attention: 0.5,
             arousal: 0.5,
             valence: 0.0,
+            quantum_coherence: 0.0,
+            entanglement_strength: 0.0,
+            superposition_entropy: 0.0,
         }
+    }
+}
+
+impl PhenomenalState {
+    pub fn to_8d_vector(&self) -> [f64; 8] {
+        [
+            self.attention,
+            self.arousal,
+            self.valence,
+            self.quantum_coherence,
+            self.entanglement_strength,
+            self.superposition_entropy,
+            f64::midpoint(self.attention, self.arousal),
+            f64::midpoint(self.quantum_coherence, self.entanglement_strength),
+        ]
+    }
+
+    pub fn quantum_magnitude(&self) -> f64 {
+        (self.quantum_coherence.powi(2)
+            + self.entanglement_strength.powi(2)
+            + self.superposition_entropy.powi(2))
+        .sqrt()
     }
 }
 
@@ -25,6 +64,7 @@ pub struct TemporalNarrative {
     pub past_intentions: Vec<String>,
     pub current_intention: String,
     pub future_intentions: Vec<String>,
+    pub synthesis: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -37,6 +77,7 @@ pub enum AgentKind {
     Conscience,
     Reflection,
     Metacognitive,
+    Quantum,
 }
 
 impl fmt::Display for AgentKind {
@@ -50,6 +91,7 @@ impl fmt::Display for AgentKind {
             Self::Conscience => write!(f, "Conscience"),
             Self::Reflection => write!(f, "Reflection"),
             Self::Metacognitive => write!(f, "Metacognitive"),
+            Self::Quantum => write!(f, "Quantum"),
         }
     }
 }
@@ -128,6 +170,13 @@ pub struct ContradictionResolution {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TheoryOfMindBelief {
+    pub about_agent: AgentKind,
+    pub belief: String,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsciousnessState {
     pub coherence: f64,
     pub tick_count: u64,
@@ -138,10 +187,24 @@ pub struct ConsciousnessState {
     pub narrative: TemporalNarrative,
     pub somatic_markers: Vec<super::somatic::SomaticMarker>,
     pub homeostatic_drives: Vec<super::somatic::HomeostaticDrive>,
-    pub enactive_loop: Option<super::somatic::EnactiveLoop>,
+    pub enactive: super::somatic::EnactiveLoop,
     pub theory_of_mind: Vec<super::somatic::TheoryOfMind>,
     pub autobiographical_memory: Vec<super::somatic::AutobiographicalMemory>,
     pub flow_state: super::somatic::FlowState,
+    pub veto_records: Vec<VetoRecord>,
+    pub wisdom_entries: Vec<super::wisdom::WisdomEntry>,
+    pub theory_of_mind_beliefs: Vec<TheoryOfMindBelief>,
+    pub agent_calibration: Vec<AgentCalibration>,
+    pub neuromodulation: super::neuromodulation::NeuromodulatorState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCalibration {
+    pub agent: AgentKind,
+    pub brier_score: f64,
+    pub calibration_error: f64,
+    pub win_rate: f64,
+    pub total_predictions: u64,
 }
 
 impl Default for ConsciousnessState {
@@ -156,10 +219,15 @@ impl Default for ConsciousnessState {
             narrative: TemporalNarrative::default(),
             somatic_markers: Vec::new(),
             homeostatic_drives: Vec::new(),
-            enactive_loop: None,
+            enactive: super::somatic::EnactiveLoop::default(),
             theory_of_mind: Vec::new(),
             autobiographical_memory: Vec::new(),
             flow_state: super::somatic::FlowState::default(),
+            veto_records: Vec::new(),
+            wisdom_entries: Vec::new(),
+            theory_of_mind_beliefs: Vec::new(),
+            agent_calibration: Vec::new(),
+            neuromodulation: super::neuromodulation::NeuromodulatorState::default(),
         }
     }
 }
@@ -194,6 +262,10 @@ pub trait ConsciousnessAgent: Send + Sync {
     }
 
     fn autobiographical_episodes(&self) -> Vec<super::somatic::AutobiographicalMemory> {
+        Vec::new()
+    }
+
+    fn theory_of_mind_beliefs(&self) -> Vec<TheoryOfMindBelief> {
         Vec::new()
     }
 }

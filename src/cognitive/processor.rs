@@ -6,9 +6,23 @@ use crate::cosmic::{
     BehavioralBias, BeliefSource, EmotionalModulator, FreeEnergyState, SelfModel, WorldModel,
 };
 
-#[path = "life/emotional.rs"]
-mod emotional;
-pub use emotional::EmotionalState;
+use super::compression::MemoryCompressor;
+use super::concept_abstraction::ConceptHierarchy;
+use super::decision_memory::DecisionMemory;
+use super::environment_model::EnvironmentModel;
+use super::experience_replay::ExperienceReplay;
+use super::governance::GovernanceLayer;
+use super::hebbian_graph::HebbianGraph;
+use super::planning_graph::PlanningGraph;
+use super::planning_memory::PlanningMemory;
+use super::preference_memory::PreferenceMemory;
+use super::procedural_memory::ProceduralMemory;
+use super::semantic_memory::SemanticMemory;
+use super::skill_evolution::SkillEvolution;
+use super::skill_library::SkillLibrary;
+use super::token_context::TokenContext;
+use super::tool_usage_log::ToolUsageLog;
+use super::EmotionalState;
 
 const PREFERENCE_EMA_ALPHA: f64 = 0.2;
 const FREE_ENERGY_CAPACITY: usize = 200;
@@ -134,6 +148,22 @@ pub struct CognitiveProcessor {
     save_interval: u64,
     persistence_path: String,
     last_prediction_id: Option<String>,
+    pub token_context: TokenContext,
+    pub skill_library: SkillLibrary,
+    pub procedural_memory: ProceduralMemory,
+    pub planning_memory: PlanningMemory,
+    pub preference_memory: PreferenceMemory,
+    pub skill_evolution: SkillEvolution,
+    pub hebbian_graph: HebbianGraph,
+    pub concept_hierarchy: ConceptHierarchy,
+    pub compressor: MemoryCompressor,
+    pub tool_usage_log: ToolUsageLog,
+    pub decision_memory: DecisionMemory,
+    pub experience_replay: ExperienceReplay,
+    pub planning_graph: PlanningGraph,
+    pub environment_model: EnvironmentModel,
+    pub governance: GovernanceLayer,
+    pub semantic_memory: SemanticMemory,
 }
 
 impl CognitiveProcessor {
@@ -149,6 +179,22 @@ impl CognitiveProcessor {
             save_interval,
             persistence_path: persistence_path.to_string(),
             last_prediction_id: None,
+            token_context: TokenContext::new(128_000, 128_000),
+            skill_library: SkillLibrary::new(),
+            procedural_memory: ProceduralMemory::new(),
+            planning_memory: PlanningMemory::new(),
+            preference_memory: PreferenceMemory::new(),
+            skill_evolution: SkillEvolution::new(),
+            hebbian_graph: HebbianGraph::new(),
+            concept_hierarchy: ConceptHierarchy::new(),
+            compressor: MemoryCompressor::new(),
+            tool_usage_log: ToolUsageLog::new(),
+            decision_memory: DecisionMemory::new(),
+            experience_replay: ExperienceReplay::new(1000),
+            planning_graph: PlanningGraph::new(),
+            environment_model: EnvironmentModel::new(),
+            governance: GovernanceLayer::new(),
+            semantic_memory: SemanticMemory::new(),
         }
     }
 
@@ -192,6 +238,7 @@ impl CognitiveProcessor {
 
         self.update_models(user_msg, sentiment, surprise);
         self.update_preferences(user_msg);
+        self.update_cognitive_layers(user_msg, sentiment, surprise);
 
         let message_type = classify_message(user_msg);
         let emotional_tags = self.emotional_tags();
@@ -377,6 +424,101 @@ impl CognitiveProcessor {
             tags.push("neutral".to_string());
         }
         tags
+    }
+
+    fn update_cognitive_layers(&mut self, user_msg: &str, sentiment: f64, surprise: f64) {
+        let word_count = user_msg.split_whitespace().count();
+        let tick = self.turn_count;
+        let base_confidence = (1.0 - surprise.min(1.0)) * sentiment.clamp(0.3, 1.0);
+
+        self.token_context.consume(word_count * 4);
+        self.token_context.source_id = "cognitive_processor".to_string();
+        self.token_context.timestamp = tick;
+        self.token_context.confidence = 1.0;
+
+        let topic = extract_topic(user_msg).unwrap_or_else(|| "general".to_string());
+        let prev_topic_hash = self.environment_model.get("last_topic_hash").unwrap_or(0.0);
+        let topic_hash = topic_to_value(&topic);
+        if prev_topic_hash > 0.0 {
+            self.hebbian_graph.strengthen(
+                &format!("topic:{prev_topic_hash:.3}"),
+                &format!("topic:{topic_hash:.3}"),
+                0.1,
+            );
+        }
+
+        self.environment_model.source_id = "cognitive_processor".to_string();
+        self.environment_model.confidence = base_confidence;
+        self.environment_model
+            .observe("last_topic_hash", topic_hash, tick);
+        self.environment_model.observe("sentiment", sentiment, tick);
+        self.environment_model.observe("surprise", surprise, tick);
+        self.environment_model
+            .observe("word_count", word_count as f64, tick);
+
+        let message_type = classify_message(user_msg);
+        self.decision_memory.record(
+            &format!("turn_{tick}"),
+            &format!("type:{message_type:?}"),
+            &format!("topic:{topic}"),
+            sentiment,
+            tick,
+        );
+        if let Some(last) = self.decision_memory.decisions.last_mut() {
+            last.source_id = "cognitive_processor".to_string();
+        }
+
+        let replay_priority = f64::midpoint(surprise, (1.0 - sentiment).abs());
+        self.experience_replay
+            .add(&format!("turn_{tick}"), replay_priority.clamp(0.0, 1.0));
+        if let Some(last) = self.experience_replay.buffer.last_mut() {
+            last.source_id = "cognitive_processor".to_string();
+            last.timestamp = tick;
+            last.confidence = replay_priority.clamp(0.0, 1.0);
+        }
+
+        self.procedural_memory.match_trigger(user_msg);
+
+        if let Some(ref detected_topic) = extract_topic(user_msg) {
+            self.skill_evolution
+                .record_outcome(detected_topic, sentiment > 0.5);
+            if let Some(perf) = self.skill_evolution.skills.get_mut(detected_topic) {
+                perf.source_id = "cognitive_processor".to_string();
+                perf.timestamp = tick;
+                perf.confidence = perf.success_rate;
+            }
+
+            self.semantic_memory.store(
+                &format!("topic_{tick}_{detected_topic}"),
+                &format!("type:{message_type:?} sentiment:{sentiment:.2}"),
+                detected_topic,
+                "cognitive_processor",
+                tick,
+                base_confidence,
+            );
+        }
+
+        if !(0.3..=0.7).contains(&sentiment) {
+            let pref_key = if sentiment > 0.7 {
+                "positive_interaction"
+            } else {
+                "negative_interaction"
+            };
+            self.preference_memory.set(
+                pref_key,
+                sentiment,
+                (sentiment - 0.5).abs() * 2.0,
+                "cognitive_processor",
+            );
+            if let Some(pref) = self.preference_memory.preferences.get_mut(pref_key) {
+                pref.timestamp = tick;
+            }
+        }
+
+        self.governance.evaluate_with_audit(user_msg, tick);
+
+        self.preference_memory.decay(0.999);
+        self.hebbian_graph.decay_all(0.999);
     }
 }
 

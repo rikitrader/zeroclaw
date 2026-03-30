@@ -154,6 +154,9 @@ pub struct Config {
     #[serde(default)]
     pub agents: HashMap<String, DelegateAgentConfig>,
 
+    #[serde(default)]
+    pub bots: HashMap<String, BotConfig>,
+
     /// Hardware configuration (wizard-driven physical world setup).
     #[serde(default)]
     pub hardware: HardwareConfig,
@@ -163,6 +166,9 @@ pub struct Config {
 
     #[serde(default)]
     pub security: SecurityConfig,
+
+    #[serde(default)]
+    pub nvidia: NvidiaConfig,
 
     #[serde(default)]
     pub cosmic_brain: CosmicBrainConfig,
@@ -202,6 +208,35 @@ pub struct DelegateAgentConfig {
 
 fn default_max_depth() -> u32 {
     3
+}
+
+// ── Bot Workspace Isolation ──────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BotConfig {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub workspace_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub identity: Option<IdentityConfig>,
+    #[serde(default)]
+    pub soul: Option<SoulConfig>,
+    pub port: u16,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub channels: Option<ChannelsConfig>,
+    #[serde(default)]
+    pub memory: Option<MemoryConfig>,
 }
 
 // ── Hardware Config (wizard-driven) ─────────────────────────────
@@ -2920,6 +2955,8 @@ pub struct ConsciousnessConfig {
     pub debate_rounds: usize,
     pub approval_threshold: f64,
     pub bus_capacity: usize,
+    pub sync_url: Option<String>,
+    pub max_discourse_depth: usize,
 }
 
 impl Default for ConsciousnessConfig {
@@ -2929,7 +2966,39 @@ impl Default for ConsciousnessConfig {
             debate_rounds: 3,
             approval_threshold: 0.65,
             bus_capacity: 256,
+            sync_url: None,
+            max_discourse_depth: 5,
         }
+    }
+}
+
+impl ConsciousnessConfig {
+    pub fn validate(&self) -> Result<()> {
+        if self.debate_rounds < 1 || self.debate_rounds > 10 {
+            anyhow::bail!(
+                "consciousness.debate_rounds must be 1-10, got {}",
+                self.debate_rounds
+            );
+        }
+        if !(0.5..=1.0).contains(&self.approval_threshold) {
+            anyhow::bail!(
+                "consciousness.approval_threshold must be 0.5-1.0, got {}",
+                self.approval_threshold
+            );
+        }
+        if self.bus_capacity == 0 {
+            anyhow::bail!(
+                "consciousness.bus_capacity must be > 0, got {}",
+                self.bus_capacity
+            );
+        }
+        if self.max_discourse_depth < 1 || self.max_discourse_depth > 20 {
+            anyhow::bail!(
+                "consciousness.max_discourse_depth must be 1-20, got {}",
+                self.max_discourse_depth
+            );
+        }
+        Ok(())
     }
 }
 
@@ -2981,6 +3050,16 @@ impl Default for LifeConfig {
     }
 }
 
+// ── NVIDIA ───────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NvidiaConfig {
+    pub triton_url: Option<String>,
+    pub tensorrt_url: Option<String>,
+    pub enable_gpu_metrics: bool,
+}
+
 // ── Config impl ──────────────────────────────────────────────────
 
 impl Default for Config {
@@ -3026,9 +3105,11 @@ impl Default for Config {
             treasury: TreasuryConfig::default(),
             peripherals: PeripheralsConfig::default(),
             agents: HashMap::new(),
+            bots: HashMap::new(),
             hardware: HardwareConfig::default(),
             skillforge: SkillForgeConfig::default(),
             security: SecurityConfig::default(),
+            nvidia: NvidiaConfig::default(),
             cosmic_brain: CosmicBrainConfig::default(),
             consciousness: ConsciousnessConfig::default(),
             cognitive: CognitiveConfig::default(),
@@ -3300,6 +3381,9 @@ impl Config {
                 decrypt_optional_secret(&store, &mut agent.api_key, "config.agents.*.api_key")?;
             }
             config.apply_env_overrides();
+            if config.consciousness.enabled {
+                config.consciousness.validate()?;
+            }
             Ok(config)
         } else {
             let mut config = Config::default();
@@ -3315,8 +3399,69 @@ impl Config {
             }
 
             config.apply_env_overrides();
+            config.validate_bot_ports()?;
             Ok(config)
         }
+    }
+
+    pub fn resolve_bot_config(&self, bot_id: &str) -> Config {
+        let bot = match self.bots.get(bot_id) {
+            Some(b) => b,
+            None => return self.clone(),
+        };
+        let mut resolved = self.clone();
+
+        let default_bot_dir = self
+            .workspace_dir
+            .parent()
+            .unwrap_or(&self.workspace_dir)
+            .join("bots")
+            .join(bot_id);
+        resolved.workspace_dir = bot.workspace_dir.clone().unwrap_or(default_bot_dir);
+
+        if let Some(ref id) = bot.identity {
+            resolved.identity = id.clone();
+        }
+        if let Some(ref soul) = bot.soul {
+            resolved.soul = soul.clone();
+        }
+        if let Some(ref provider) = bot.provider {
+            resolved.default_provider = Some(provider.clone());
+        }
+        if let Some(ref model) = bot.model {
+            resolved.default_model = Some(model.clone());
+        }
+        if let Some(ref key) = bot.api_key {
+            resolved.api_key = Some(key.clone());
+        }
+        if let Some(temp) = bot.temperature {
+            resolved.default_temperature = temp;
+        }
+        if let Some(ref channels) = bot.channels {
+            resolved.channels_config = channels.clone();
+        }
+        if let Some(ref mem) = bot.memory {
+            resolved.memory = mem.clone();
+        }
+        resolved.gateway.port = bot.port;
+        resolved.bots = HashMap::new();
+        resolved
+    }
+
+    pub fn validate_bot_ports(&self) -> Result<()> {
+        let mut seen: HashMap<u16, String> = HashMap::new();
+        for (id, bot) in &self.bots {
+            if let Some(prev_id) = seen.get(&bot.port) {
+                anyhow::bail!(
+                    "Bot port conflict: bots '{}' and '{}' both use port {}",
+                    prev_id,
+                    id,
+                    bot.port
+                );
+            }
+            seen.insert(bot.port, id.clone());
+        }
+        Ok(())
     }
 
     /// Apply environment variable overrides to config
@@ -3868,8 +4013,10 @@ default_temperature = 0.7
             treasury: TreasuryConfig::default(),
             peripherals: PeripheralsConfig::default(),
             agents: HashMap::new(),
+            bots: HashMap::new(),
             hardware: HardwareConfig::default(),
             security: SecurityConfig::default(),
+            nvidia: NvidiaConfig::default(),
             cosmic_brain: CosmicBrainConfig::default(),
             consciousness: ConsciousnessConfig::default(),
             cognitive: CognitiveConfig::default(),
@@ -4019,8 +4166,10 @@ tool_dispatcher = "xml"
             treasury: TreasuryConfig::default(),
             peripherals: PeripheralsConfig::default(),
             agents: HashMap::new(),
+            bots: HashMap::new(),
             hardware: HardwareConfig::default(),
             security: SecurityConfig::default(),
+            nvidia: NvidiaConfig::default(),
             cosmic_brain: CosmicBrainConfig::default(),
             consciousness: ConsciousnessConfig::default(),
             cognitive: CognitiveConfig::default(),
