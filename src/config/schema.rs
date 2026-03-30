@@ -181,6 +181,13 @@ pub struct Config {
 
     #[serde(default)]
     pub life: LifeConfig,
+
+    #[serde(default = "default_bot_max_memory_mb")]
+    pub max_memory_mb: u64,
+    #[serde(default = "default_bot_max_concurrent_requests")]
+    pub max_concurrent_requests: u32,
+    #[serde(default = "default_bot_max_tokens_per_minute")]
+    pub max_tokens_per_minute: u64,
 }
 
 // ── Delegate Agents ──────────────────────────────────────────────
@@ -237,6 +244,94 @@ pub struct BotConfig {
     pub channels: Option<ChannelsConfig>,
     #[serde(default)]
     pub memory: Option<MemoryConfig>,
+    #[serde(default)]
+    pub max_memory_mb: Option<u64>,
+    #[serde(default)]
+    pub max_concurrent_requests: Option<u32>,
+    #[serde(default)]
+    pub max_tokens_per_minute: Option<u64>,
+}
+
+// ── Bot Resource Limit Defaults ─────────────────────────────────
+
+fn default_bot_max_memory_mb() -> u64 {
+    512
+}
+
+fn default_bot_max_concurrent_requests() -> u32 {
+    10
+}
+
+fn default_bot_max_tokens_per_minute() -> u64 {
+    100_000
+}
+
+/// Simple token-bucket rate limiter for per-bot resource enforcement.
+#[derive(Debug)]
+pub struct BotRateLimiter {
+    max_tokens_per_minute: u64,
+    max_concurrent: u32,
+    tokens_used: std::sync::atomic::AtomicU64,
+    active_requests: std::sync::atomic::AtomicU32,
+    window_start: parking_lot::Mutex<std::time::Instant>,
+}
+
+impl BotRateLimiter {
+    pub fn new(max_tokens_per_minute: u64, max_concurrent: u32) -> Self {
+        Self {
+            max_tokens_per_minute,
+            max_concurrent,
+            tokens_used: std::sync::atomic::AtomicU64::new(0),
+            active_requests: std::sync::atomic::AtomicU32::new(0),
+            window_start: parking_lot::Mutex::new(std::time::Instant::now()),
+        }
+    }
+
+    pub fn from_config(config: &Config) -> Self {
+        Self::new(config.max_tokens_per_minute, config.max_concurrent_requests)
+    }
+
+    pub fn try_acquire(&self) -> bool {
+        let current = self
+            .active_requests
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if current >= self.max_concurrent {
+            return false;
+        }
+        self.active_requests
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        true
+    }
+
+    pub fn release(&self) {
+        self.active_requests
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn record_tokens(&self, count: u64) -> bool {
+        self.maybe_reset_window();
+        let prev = self
+            .tokens_used
+            .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+        prev + count <= self.max_tokens_per_minute
+    }
+
+    pub fn tokens_remaining(&self) -> u64 {
+        self.maybe_reset_window();
+        let used = self
+            .tokens_used
+            .load(std::sync::atomic::Ordering::Relaxed);
+        self.max_tokens_per_minute.saturating_sub(used)
+    }
+
+    fn maybe_reset_window(&self) {
+        let mut start = self.window_start.lock();
+        if start.elapsed() >= std::time::Duration::from_secs(60) {
+            self.tokens_used
+                .store(0, std::sync::atomic::Ordering::Relaxed);
+            *start = std::time::Instant::now();
+        }
+    }
 }
 
 // ── Hardware Config (wizard-driven) ─────────────────────────────
@@ -3115,6 +3210,9 @@ impl Default for Config {
             cognitive: CognitiveConfig::default(),
             life: LifeConfig::default(),
             query_classification: QueryClassificationConfig::default(),
+            max_memory_mb: default_bot_max_memory_mb(),
+            max_concurrent_requests: default_bot_max_concurrent_requests(),
+            max_tokens_per_minute: default_bot_max_tokens_per_minute(),
         }
     }
 }
@@ -3444,6 +3542,13 @@ impl Config {
             resolved.memory = mem.clone();
         }
         resolved.gateway.port = bot.port;
+        resolved.max_memory_mb = bot.max_memory_mb.unwrap_or(default_bot_max_memory_mb());
+        resolved.max_concurrent_requests = bot
+            .max_concurrent_requests
+            .unwrap_or(default_bot_max_concurrent_requests());
+        resolved.max_tokens_per_minute = bot
+            .max_tokens_per_minute
+            .unwrap_or(default_bot_max_tokens_per_minute());
         resolved.bots = HashMap::new();
         resolved
     }
@@ -4022,6 +4127,9 @@ default_temperature = 0.7
             cognitive: CognitiveConfig::default(),
             life: LifeConfig::default(),
             skillforge: SkillForgeConfig::default(),
+            max_memory_mb: 512,
+            max_concurrent_requests: 10,
+            max_tokens_per_minute: 100_000,
         };
 
         let toml_str = toml::to_string_pretty(&config).unwrap();
@@ -4175,6 +4283,9 @@ tool_dispatcher = "xml"
             cognitive: CognitiveConfig::default(),
             life: LifeConfig::default(),
             skillforge: SkillForgeConfig::default(),
+            max_memory_mb: 512,
+            max_concurrent_requests: 10,
+            max_tokens_per_minute: 100_000,
         };
 
         config.save().unwrap();

@@ -184,5 +184,60 @@ mod tests {
         let summary = profiler.summary();
         assert_eq!(summary.total_ticks, 0);
         assert_eq!(summary.avg_tick_ms, 0.0);
+        assert_eq!(summary.p50_tick_ms, 0.0);
+        assert_eq!(summary.p99_tick_ms, 0.0);
+        assert!(summary.phase_breakdown.is_empty());
+        assert!(summary.agent_breakdown.is_empty());
+        assert!(summary.memory_trend.is_empty());
+    }
+
+    #[test]
+    fn multiple_records_aggregate_correctly() {
+        let mut profiler = ConsciousnessProfiler::new();
+        profiler.record_tick(Duration::from_millis(10));
+        profiler.record_tick(Duration::from_millis(20));
+        profiler.record_tick(Duration::from_millis(30));
+
+        profiler.record_phase("perceive", Duration::from_millis(5));
+        profiler.record_phase("perceive", Duration::from_millis(15));
+
+        profiler.record_agent("chairman", Duration::from_millis(100));
+        profiler.record_agent("chairman", Duration::from_millis(200));
+        profiler.record_agent("analyst", Duration::from_millis(50));
+
+        profiler.record_memory_snapshot(1024);
+        profiler.record_memory_snapshot(2048);
+
+        let summary = profiler.summary();
+        assert_eq!(summary.total_ticks, 3);
+        let expected_avg = (10.0 + 20.0 + 30.0) / 3.0;
+        assert!((summary.avg_tick_ms - expected_avg).abs() < 0.01);
+
+        let perceive = &summary.phase_breakdown["perceive"];
+        assert_eq!(perceive.count, 2);
+        assert!((perceive.avg_ms - 10.0).abs() < 0.01);
+        assert!((perceive.min_ms - 5.0).abs() < 0.01);
+        assert!((perceive.max_ms - 15.0).abs() < 0.01);
+
+        let chairman = &summary.agent_breakdown["chairman"];
+        assert_eq!(chairman.count, 2);
+        assert!((chairman.avg_ms - 150.0).abs() < 0.01);
+
+        let analyst = &summary.agent_breakdown["analyst"];
+        assert_eq!(analyst.count, 1);
+        assert!((analyst.avg_ms - 50.0).abs() < 0.01);
+
+        assert_eq!(summary.memory_trend, vec![1024, 2048]);
+    }
+
+    #[test]
+    fn memory_snapshot_evicts_old_entries() {
+        let mut profiler = ConsciousnessProfiler::new();
+        for i in 0..1002 {
+            profiler.record_memory_snapshot(i);
+        }
+        let summary = profiler.summary();
+        assert_eq!(summary.memory_trend.len(), 502);
+        assert_eq!(*summary.memory_trend.last().unwrap(), 1001);
     }
 }

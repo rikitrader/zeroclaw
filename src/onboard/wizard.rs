@@ -153,6 +153,9 @@ pub fn run_wizard() -> Result<Config> {
         cognitive: crate::config::CognitiveConfig::default(),
         life: crate::config::LifeConfig::default(),
         query_classification: crate::config::QueryClassificationConfig::default(),
+        max_memory_mb: 512,
+        max_concurrent_requests: 10,
+        max_tokens_per_minute: 100_000,
     };
 
     println!(
@@ -392,6 +395,9 @@ pub fn run_quick_setup(
         cognitive: crate::config::CognitiveConfig::default(),
         life: crate::config::LifeConfig::default(),
         query_classification: crate::config::QueryClassificationConfig::default(),
+        max_memory_mb: 512,
+        max_concurrent_requests: 10,
+        max_tokens_per_minute: 100_000,
     };
 
     config.save()?;
