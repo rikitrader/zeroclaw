@@ -2466,14 +2466,9 @@ pub async fn run(
                     history.clear();
                     history.push(ChatMessage::system(&system_prompt));
                     // Clear conversation and daily memory
-                    let mut cleared = 0;
+                    let mut cleared = 0usize;
                     for category in [MemoryCategory::Conversation, MemoryCategory::Daily] {
-                        let entries = mem.list(Some(&category), None).await.unwrap_or_default();
-                        for entry in entries {
-                            if mem.forget(&entry.key).await.unwrap_or(false) {
-                                cleared += 1;
-                            }
-                        }
+                        cleared += mem.clear(Some(&category)).await.unwrap_or(0);
                     }
                     if cleared > 0 {
                         println!("Conversation cleared ({cleared} memory entries removed).\n");

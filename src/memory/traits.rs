@@ -74,6 +74,10 @@ pub trait Memory: Send + Sync {
     /// Remove a memory by key
     async fn forget(&self, key: &str) -> anyhow::Result<bool>;
 
+    /// Clear all memories, optionally filtered by category.
+    /// Returns the number of entries removed.
+    async fn clear(&self, category: Option<&MemoryCategory>) -> anyhow::Result<usize>;
+
     /// Count total memories
     async fn count(&self) -> anyhow::Result<usize>;
 
