@@ -114,6 +114,8 @@ impl HttpRequestTool {
         headers: Vec<(String, String)>,
         body: Option<&str>,
     ) -> anyhow::Result<reqwest::Response> {
+        validate_resolved_ip(url).await?;
+
         let builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(self.timeout_secs))
             .connect_timeout(Duration::from_secs(10))
@@ -432,6 +434,37 @@ fn is_non_global_v6(v6: std::net::Ipv6Addr) -> bool {
         || (segs[0] & 0xffc0) == 0xfe80   // Link-local (fe80::/10)
         || (segs[0] == 0x2001 && segs[1] == 0x0db8) // Documentation (2001:db8::/32)
         || v6.to_ipv4_mapped().is_some_and(is_non_global_v4)
+}
+
+async fn validate_resolved_ip(url: &str) -> anyhow::Result<()> {
+    let host = extract_host(url)?;
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return Ok(());
+    }
+    let addrs: Vec<std::net::SocketAddr> =
+        tokio::net::lookup_host(format!("{host}:0"))
+            .await?
+            .collect();
+    for addr in &addrs {
+        let ip = addr.ip();
+        match ip {
+            std::net::IpAddr::V4(v4) if is_non_global_v4(v4) => {
+                anyhow::bail!(
+                    "DNS rebind blocked: {host} resolved to private IP {v4}"
+                );
+            }
+            std::net::IpAddr::V6(v6) if is_non_global_v6(v6) => {
+                anyhow::bail!(
+                    "DNS rebind blocked: {host} resolved to private IP {v6}"
+                );
+            }
+            _ => {}
+        }
+    }
+    if addrs.is_empty() {
+        anyhow::bail!("DNS resolution failed: no addresses for {host}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

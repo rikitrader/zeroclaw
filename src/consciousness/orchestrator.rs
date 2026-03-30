@@ -1,3 +1,6 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 use chrono::Utc;
 use serde::Serialize;
 
@@ -20,6 +23,34 @@ use super::traits::{
 use super::wisdom::WisdomAccumulator;
 use crate::cosmic::{CosmicPersistence, PersistenceError};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum RebuttalStrategy {
+    EvidenceBased,
+    AnalogySeeking,
+    PrecedentBased,
+    DevilsAdvocate,
+}
+
+impl RebuttalStrategy {
+    fn prompt(self) -> &'static str {
+        match self {
+            Self::EvidenceBased => "Provide concrete evidence for your position",
+            Self::AnalogySeeking => "What past decision is most analogous?",
+            Self::PrecedentBased => "What precedent supports this choice?",
+            Self::DevilsAdvocate => "Argue the opposite of your initial position",
+        }
+    }
+
+    fn sequence() -> &'static [Self] {
+        &[
+            Self::EvidenceBased,
+            Self::AnalogySeeking,
+            Self::PrecedentBased,
+            Self::DevilsAdvocate,
+        ]
+    }
+}
+
 pub struct ConsciousnessConfig {
     pub debate_rounds: usize,
     pub approval_threshold: f64,
@@ -34,6 +65,8 @@ pub struct ConsciousnessConfig {
     pub kill_switch_recovery_ticks: u64,
     pub sync_url: Option<String>,
     pub sync_token: Option<String>,
+    pub max_discourse_depth: usize,
+    pub enable_quantum_agent: bool,
 }
 
 impl Default for ConsciousnessConfig {
@@ -52,7 +85,45 @@ impl Default for ConsciousnessConfig {
             kill_switch_recovery_ticks: 3,
             sync_url: None,
             sync_token: None,
+            max_discourse_depth: 5,
+            enable_quantum_agent: true,
         }
+    }
+}
+
+impl ConsciousnessConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if !(0.0..=1.0).contains(&self.coherence_ema_alpha) {
+            anyhow::bail!(
+                "consciousness.coherence_ema_alpha must be 0.0-1.0, got {}",
+                self.coherence_ema_alpha
+            );
+        }
+        if !(0.0..=1.0).contains(&self.coherence_decay_on_empty) {
+            anyhow::bail!(
+                "consciousness.coherence_decay_on_empty must be 0.0-1.0, got {}",
+                self.coherence_decay_on_empty
+            );
+        }
+        if !(0.0..=1.0).contains(&self.collective_coupling) {
+            anyhow::bail!(
+                "consciousness.collective_coupling must be 0.0-1.0, got {}",
+                self.collective_coupling
+            );
+        }
+        if !(0.0..=1.0).contains(&self.min_edge) {
+            anyhow::bail!(
+                "consciousness.min_edge must be 0.0-1.0, got {}",
+                self.min_edge
+            );
+        }
+        if self.calibration_drift_threshold <= 0.0 {
+            anyhow::bail!(
+                "consciousness.calibration_drift_threshold must be > 0.0, got {}",
+                self.calibration_drift_threshold
+            );
+        }
+        Ok(())
     }
 }
 
@@ -71,6 +142,10 @@ pub struct ConsciousnessOrchestrator {
     prediction_ledger: PredictionMarketLedger,
     last_tick_payload: Option<serde_json::Value>,
     world_model_prediction_error: f64,
+    last_proposal_hash: u64,
+    cached_consensus: Option<f64>,
+    profiler: super::profiling::ConsciousnessProfiler,
+    last_rebuttal_resolution: Option<RebuttalStrategy>,
 }
 
 impl ConsciousnessOrchestrator {
@@ -102,6 +177,10 @@ impl ConsciousnessOrchestrator {
             prediction_ledger: PredictionMarketLedger::new(1000),
             last_tick_payload: None,
             world_model_prediction_error: 0.0,
+            last_proposal_hash: 0,
+            cached_consensus: None,
+            profiler: super::profiling::ConsciousnessProfiler::new(),
+            last_rebuttal_resolution: None,
         }
     }
 
@@ -127,6 +206,14 @@ impl ConsciousnessOrchestrator {
 
     pub fn config(&self) -> &ConsciousnessConfig {
         &self.config
+    }
+
+    pub fn get_profile_summary(&self) -> super::profiling::ProfileSummary {
+        self.profiler.summary()
+    }
+
+    pub fn last_rebuttal_resolution(&self) -> Option<RebuttalStrategy> {
+        self.last_rebuttal_resolution
     }
 
     pub fn neuromodulation(&self) -> &NeuromodulationEngine {
@@ -179,7 +266,10 @@ impl ConsciousnessOrchestrator {
         );
         self.last_tick_payload = Some(payload.clone());
 
-        let url = self.config.sync_url.clone().unwrap();
+        let url = match self.config.sync_url.clone() {
+            Some(u) => u,
+            None => return,
+        };
         let token = self.config.sync_token.clone();
         std::thread::spawn(move || {
             let client = match reqwest::blocking::Client::builder()
@@ -215,25 +305,70 @@ impl ConsciousnessOrchestrator {
         }
     }
 
+    fn proposal_hash(proposals: &[Proposal]) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        for p in proposals {
+            p.id.hash(&mut hasher);
+            p.action.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     pub fn tick(&mut self) -> TickResult {
         if let Some(ref collective) = self.collective {
             collective
                 .influence_local_state(&mut self.state.phenomenal, self.config.collective_coupling);
         }
 
-        let all_proposals = self.phase_perceive();
+        let t_perceive = std::time::Instant::now();
+        let mut all_proposals = self.phase_perceive();
+        let perceive_dur = t_perceive.elapsed();
+        let perceive_us = perceive_dur.as_micros();
+        self.profiler.record_phase("perceive", perceive_dur);
+
+        let pre_prune_count = all_proposals.len();
+        all_proposals.retain(|p| p.confidence >= 0.2);
+        if pre_prune_count != all_proposals.len() {
+            tracing::debug!(
+                pruned = pre_prune_count - all_proposals.len(),
+                "Pruned low-confidence proposals (< 0.2)"
+            );
+        }
 
         let contradictions = self.detect_contradictions(&all_proposals);
 
+        let t_deliberate = std::time::Instant::now();
         let (filtered_proposals, resolutions) =
             self.resolve_contradictions(&all_proposals, &contradictions);
 
+        let current_hash = Self::proposal_hash(&filtered_proposals);
+
         let debate_rounds_used = self.effective_debate_rounds();
         self.state.veto_records.clear();
-        let (approved, vetoed, veto_records) = self.phase_debate_and_decide(&filtered_proposals);
+
+        let (approved, vetoed, veto_records) = if current_hash == self.last_proposal_hash
+            && contradictions.is_empty()
+            && self
+                .cached_consensus
+                .is_some_and(|c| c >= self.config.approval_threshold)
+        {
+            tracing::debug!("Skipping re-evaluation — proposals unchanged since last tick");
+            (filtered_proposals.clone(), 0, Vec::new())
+        } else {
+            self.phase_debate_and_decide(&filtered_proposals)
+        };
+        self.last_proposal_hash = current_hash;
+        let deliberate_dur = t_deliberate.elapsed();
+        let deliberate_us = deliberate_dur.as_micros();
+        self.profiler.record_phase("deliberate", deliberate_dur);
+
         self.state.veto_records = veto_records.clone();
 
+        let t_act = std::time::Instant::now();
         let outcomes = self.phase_act(&approved);
+        let act_dur = t_act.elapsed();
+        let act_us = act_dur.as_micros();
+        self.profiler.record_phase("act", act_dur);
 
         for outcome in &outcomes {
             self.state.enactive.record_action_perception_cycle(
@@ -253,16 +388,20 @@ impl ConsciousnessOrchestrator {
             &approved_actions,
         );
 
-        for outcome in &outcomes {
-            let actual = if outcome.success { 1.0 } else { 0.0 };
-            for record in self.prediction_ledger.unresolved_predictions() {
-                if record.domain == outcome.action {
-                    let id = record.id;
-                    self.prediction_ledger
-                        .resolve_prediction(id, actual, self.state.tick_count);
-                    break;
-                }
-            }
+        let unresolved_index = self.prediction_ledger.unresolved_by_domain();
+        let prediction_resolutions: Vec<(u64, f64)> = outcomes
+            .iter()
+            .filter_map(|outcome| {
+                let actual = if outcome.success { 1.0 } else { 0.0 };
+                unresolved_index
+                    .get(outcome.action.as_str())
+                    .and_then(|entries| entries.first())
+                    .map(|&(id, _)| (id, actual))
+            })
+            .collect();
+        for (id, actual) in prediction_resolutions {
+            self.prediction_ledger
+                .resolve_prediction(id, actual, self.state.tick_count);
         }
 
         self.state.agent_calibration = self
@@ -280,7 +419,33 @@ impl ConsciousnessOrchestrator {
 
         self.publish_outcomes_to_bus(&outcomes);
 
+        let t_reflect = std::time::Instant::now();
         self.phase_reflect(&outcomes);
+        let reflect_dur = t_reflect.elapsed();
+        let reflect_us = reflect_dur.as_micros();
+        self.profiler.record_phase("reflect", reflect_dur);
+
+        let tick_total = perceive_dur + deliberate_dur + act_dur + reflect_dur;
+        self.profiler.record_tick(tick_total);
+
+        tracing::debug!(
+            perceive_us = perceive_us,
+            deliberate_us = deliberate_us,
+            act_us = act_us,
+            reflect_us = reflect_us,
+            "Consciousness tick phase timing"
+        );
+
+        if self.state.tick_count > 0 && self.state.tick_count.is_multiple_of(100) {
+            let summary = self.profiler.summary();
+            tracing::info!(
+                total_ticks = summary.total_ticks,
+                avg_tick_ms = %format!("{:.2}", summary.avg_tick_ms),
+                p50_tick_ms = %format!("{:.2}", summary.p50_tick_ms),
+                p99_tick_ms = %format!("{:.2}", summary.p99_tick_ms),
+                "Consciousness profiler summary (100-tick interval)"
+            );
+        }
 
         self.apply_metacognitive_adjustments(&outcomes);
 
@@ -296,10 +461,18 @@ impl ConsciousnessOrchestrator {
                 total_valence += ps.valence;
             }
             let n = agent_count as f64;
-            let valence_values: Vec<f64> = self.agents.iter().map(|a| a.phenomenal_state().valence).collect();
+            let valence_values: Vec<f64> = self
+                .agents
+                .iter()
+                .map(|a| a.phenomenal_state().valence)
+                .collect();
             let valence_mean = total_valence / n;
             let valence_variance = if n > 1.0 {
-                valence_values.iter().map(|v| (v - valence_mean).powi(2)).sum::<f64>() / n
+                valence_values
+                    .iter()
+                    .map(|v| (v - valence_mean).powi(2))
+                    .sum::<f64>()
+                    / n
             } else {
                 0.0
             };
@@ -315,7 +488,8 @@ impl ConsciousnessOrchestrator {
             let superposition_entropy = if outcomes.is_empty() {
                 0.5
             } else {
-                let approve_rate = outcomes.iter().filter(|o| o.success).count() as f64 / outcomes.len() as f64;
+                let approve_rate =
+                    outcomes.iter().filter(|o| o.success).count() as f64 / outcomes.len() as f64;
                 let p = approve_rate.clamp(0.01, 0.99);
                 -(p * p.ln() + (1.0 - p) * (1.0 - p).ln()).min(1.0)
             };
@@ -535,6 +709,12 @@ impl ConsciousnessOrchestrator {
             enactive_success_rate,
             modulators: *self.neuromodulation.state(),
             ncn_signals: *self.neuromodulation.ncn_signals(),
+            quantum_coherence: self
+                .agents
+                .iter()
+                .find(|a| a.kind() == AgentKind::Quantum)
+                .map(|a| a.phenomenal_state().quantum_coherence)
+                .unwrap_or(0.0),
         };
         self.push_sync(&result);
         result
@@ -631,8 +811,23 @@ impl ConsciousnessOrchestrator {
         contradictions
     }
 
+    fn agent_prediction_accuracy(&self, agent: AgentKind) -> f64 {
+        self.state
+            .agent_calibration
+            .iter()
+            .find(|c| c.agent == agent)
+            .map(|c| {
+                if c.total_predictions >= 3 {
+                    (1.0 - c.calibration_error).max(0.1)
+                } else {
+                    0.5
+                }
+            })
+            .unwrap_or(0.5)
+    }
+
     fn resolve_contradictions(
-        &self,
+        &mut self,
         proposals: &[Proposal],
         contradictions: &[Contradiction],
     ) -> (Vec<Proposal>, Vec<ContradictionResolution>) {
@@ -644,10 +839,106 @@ impl ConsciousnessOrchestrator {
             let prop_b = proposals.iter().find(|p| p.id == contradiction.proposal_b);
 
             if let (Some(a), Some(b)) = (prop_a, prop_b) {
-                let score_a = a.priority.weight() * a.confidence;
-                let score_b = b.priority.weight() * b.confidence;
+                let accuracy_a = self.agent_prediction_accuracy(a.source);
+                let accuracy_b = self.agent_prediction_accuracy(b.source);
+                let score_a = a.priority.weight() * a.confidence * accuracy_a;
+                let score_b = b.priority.weight() * b.confidence * accuracy_b;
 
-                if (score_a - score_b).abs() < f64::EPSILON {
+                if (score_a - score_b).abs() < 0.1 {
+                    tracing::debug!(
+                        proposal_a = a.id,
+                        proposal_b = b.id,
+                        score_a = %format!("{score_a:.3}"),
+                        score_b = %format!("{score_b:.3}"),
+                        "Contradiction scores within 0.1 — entering multi-strategy rebuttal"
+                    );
+
+                    let mut final_a = score_a;
+                    let mut final_b = score_b;
+                    let mut resolved_by: Option<RebuttalStrategy> = None;
+                    let max_rounds = self
+                        .config
+                        .max_discourse_depth
+                        .min(RebuttalStrategy::sequence().len());
+
+                    for (round, strategy) in RebuttalStrategy::sequence().iter().enumerate() {
+                        if round >= max_rounds {
+                            break;
+                        }
+                        tracing::debug!(
+                            round = round,
+                            strategy = ?strategy,
+                            "Rebuttal round with strategy"
+                        );
+
+                        let _prompt = strategy.prompt();
+
+                        let rebuttal_verdicts_a: Vec<Verdict> = self
+                            .agents
+                            .iter_mut()
+                            .filter(|ag| ag.kind() == a.source)
+                            .flat_map(|ag| ag.deliberate(std::slice::from_ref(b), &self.state))
+                            .collect();
+                        let rebuttal_verdicts_b: Vec<Verdict> = self
+                            .agents
+                            .iter_mut()
+                            .filter(|ag| ag.kind() == b.source)
+                            .flat_map(|ag| ag.deliberate(std::slice::from_ref(a), &self.state))
+                            .collect();
+
+                        let weight = match strategy {
+                            RebuttalStrategy::EvidenceBased => 0.15,
+                            RebuttalStrategy::AnalogySeeking | RebuttalStrategy::PrecedentBased => {
+                                0.10
+                            }
+                            RebuttalStrategy::DevilsAdvocate => 0.05,
+                        };
+
+                        let rebuttal_a: f64 =
+                            rebuttal_verdicts_a.iter().map(|v| v.confidence).sum();
+                        let rebuttal_b: f64 =
+                            rebuttal_verdicts_b.iter().map(|v| v.confidence).sum();
+
+                        if *strategy == RebuttalStrategy::DevilsAdvocate {
+                            final_a += rebuttal_b * weight;
+                            final_b += rebuttal_a * weight;
+                        } else {
+                            final_a += rebuttal_a * weight;
+                            final_b += rebuttal_b * weight;
+                        }
+
+                        if (final_a - final_b).abs() >= 0.1 {
+                            resolved_by = Some(*strategy);
+                            tracing::debug!(
+                                strategy = ?strategy,
+                                final_a = %format!("{final_a:.3}"),
+                                final_b = %format!("{final_b:.3}"),
+                                "Rebuttal resolved deadlock"
+                            );
+                            break;
+                        }
+                    }
+
+                    self.last_rebuttal_resolution = resolved_by;
+
+                    if (final_a - final_b).abs() < f64::EPSILON {
+                        continue;
+                    }
+
+                    let (winner, loser, winner_score, loser_score) = if final_a > final_b {
+                        (a.id, b.id, final_a, final_b)
+                    } else {
+                        (b.id, a.id, final_b, final_a)
+                    };
+
+                    losers.insert(loser);
+                    resolutions.push(ContradictionResolution {
+                        contradiction: contradiction.clone(),
+                        winner,
+                        loser,
+                        winner_score,
+                        loser_score,
+                    });
                     continue;
                 }
 
@@ -692,13 +983,17 @@ impl ConsciousnessOrchestrator {
             let mut round_verdicts = Vec::new();
 
             for agent in &mut self.agents {
+                let t_agent = std::time::Instant::now();
                 let verdicts = agent.deliberate(proposals, &self.state);
+                self.profiler
+                    .record_agent(&format!("{}", agent.kind()), t_agent.elapsed());
                 round_verdicts.extend(verdicts);
             }
 
             all_verdicts.push(round_verdicts.clone());
 
             let consensus = self.compute_consensus(&round_verdicts, proposals);
+            self.cached_consensus = Some(consensus);
             if consensus >= self.config.approval_threshold && round > 0 {
                 break;
             }
@@ -917,6 +1212,22 @@ impl ConsciousnessOrchestrator {
             })
             .unwrap_or_default();
         self.metacognition.restore(observations, adjustments);
+        if let Some(v) = data.get("wisdom") {
+            match serde_json::from_value::<Vec<super::wisdom::WisdomEntry>>(v.clone()) {
+                Ok(entries) => self.wisdom.restore(entries),
+                Err(e) => tracing::warn!(error = %e, "Failed to restore wisdom; using defaults"),
+            }
+        }
+        if let Some(v) = data.get("prediction_ledger") {
+            match serde_json::from_value::<Vec<super::prediction_market::PredictionRecord>>(
+                v.clone(),
+            ) {
+                Ok(records) => self.prediction_ledger.restore(records),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to restore prediction_ledger; using defaults");
+                }
+            }
+        }
         Ok(())
     }
 
@@ -984,6 +1295,7 @@ pub struct TickResult {
     pub enactive_success_rate: f64,
     pub modulators: super::neuromodulation::NeuromodulatorState,
     pub ncn_signals: super::neuromodulation::NcnSignals,
+    pub quantum_coherence: f64,
 }
 
 #[cfg(test)]
@@ -1157,7 +1469,7 @@ mod tests {
 
     #[test]
     fn contradiction_resolution_picks_higher_priority() {
-        let orch = ConsciousnessOrchestrator::new(ConsciousnessConfig::default());
+        let mut orch = ConsciousnessOrchestrator::new(ConsciousnessConfig::default());
 
         let high_priority = Proposal {
             id: 1,
@@ -1198,7 +1510,7 @@ mod tests {
 
     #[test]
     fn contradiction_resolution_equal_scores_keeps_both() {
-        let orch = ConsciousnessOrchestrator::new(ConsciousnessConfig::default());
+        let mut orch = ConsciousnessOrchestrator::new(ConsciousnessConfig::default());
 
         let a = Proposal {
             id: 10,

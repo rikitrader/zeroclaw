@@ -26,6 +26,7 @@ pub mod nvidia_triton;
 pub mod nvidia_vision;
 pub mod proxy_config;
 pub mod pushover;
+pub mod research_claw;
 pub mod schedule;
 pub mod schema;
 pub mod screenshot;
@@ -82,6 +83,8 @@ pub use nvidia_triton::NvidiaTritonInferenceTool;
 pub use nvidia_vision::NvidiaVisionTool;
 pub use proxy_config::ProxyConfigTool;
 pub use pushover::PushoverTool;
+#[allow(unused_imports)]
+pub use research_claw::ResearchClawTool;
 pub use schedule::ScheduleTool;
 pub use schema::{CleaningStrategy, SchemaCleanr};
 pub use screenshot::ScreenshotTool;

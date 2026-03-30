@@ -147,6 +147,15 @@ fn autosave_memory_key(prefix: &str) -> String {
     format!("{prefix}_{}", Uuid::new_v4())
 }
 
+const RECALL_MARKERS: &[&str] = &["[Memory context]", "[Recall]", "[Hardware context]"];
+
+fn is_recall_content(content: &str) -> bool {
+    let trimmed = content.trim_start();
+    RECALL_MARKERS
+        .iter()
+        .any(|marker| trimmed.starts_with(marker))
+}
+
 /// Trim conversation history to prevent unbounded growth.
 /// Preserves the system prompt (first message if role=system) and the most recent messages.
 fn trim_history(history: &mut Vec<ChatMessage>, max_history: usize) {
@@ -191,7 +200,7 @@ fn apply_compaction_summary(
     history.splice(start..compact_end, std::iter::once(summary_msg));
 }
 
-async fn auto_compact_history(
+pub(crate) async fn auto_compact_history(
     history: &mut Vec<ChatMessage>,
     provider: &dyn Provider,
     model: &str,
@@ -979,6 +988,14 @@ pub(crate) async fn run_tool_call_loop(ctx: LoopContext<'_>) -> Result<String> {
         })
         .collect();
     let use_native_tools = provider.supports_native_tools() && !tool_specs.is_empty();
+    let tool_names: Vec<&str> = tool_specs.iter().map(|t| t.name.as_str()).collect();
+    tracing::info!(
+        use_native_tools,
+        tool_count = tool_specs.len(),
+        supports_native = provider.supports_native_tools(),
+        ?tool_names,
+        "Tool call loop: native tools decision"
+    );
 
     for _iteration in 0..max_iterations {
         let effective_model = if let (Some(surv), Some(strat)) = (survival, model_strategy) {
@@ -1036,6 +1053,12 @@ pub(crate) async fn run_tool_call_loop(ctx: LoopContext<'_>) -> Result<String> {
         } else {
             None
         };
+        tracing::debug!(
+            tools_included = request_tools.is_some(),
+            tool_count = request_tools.map(|t| t.len()).unwrap_or(0),
+            model = %effective_model,
+            "Sending chat request to provider"
+        );
 
         let (response_text, parsed_text, tool_calls, assistant_history_content, native_tool_calls) =
             match provider
@@ -1099,6 +1122,17 @@ pub(crate) async fn run_tool_call_loop(ctx: LoopContext<'_>) -> Result<String> {
                     }
 
                     let response_text = resp.text_or_empty().to_string();
+                    tracing::debug!(
+                        native_tool_calls = resp.tool_calls.len(),
+                        has_text = resp.text.is_some(),
+                        text_len = response_text.len(),
+                        "Provider response received"
+                    );
+                    tracing::info!(
+                        native_tool_calls = resp.tool_calls.len(),
+                        response_preview = %response_text.chars().take(200).collect::<String>(),
+                        "LLM response details"
+                    );
                     let mut calls = parse_structured_tool_calls(&resp.tool_calls);
                     let mut parsed_text = String::new();
 
@@ -2024,7 +2058,7 @@ pub async fn run(
             }
         }
 
-        if config.memory.auto_save {
+        if config.memory.auto_save && !is_recall_content(&msg) {
             let user_key = autosave_memory_key("user_msg");
             let _ = mem
                 .store(&user_key, &msg, MemoryCategory::Conversation, None)
@@ -2088,6 +2122,7 @@ pub async fn run(
                 }
 
                 let meta = orch.metacognition();
+                if orch.state().tick_count % 10 == 0 {
                 crate::gateway::update_consciousness_snapshot(
                     crate::gateway::ConsciousnessSnapshot {
                         enabled: true,
@@ -2119,6 +2154,8 @@ pub async fn run(
                         stress_level: Some(orch.neuromodulation().stress_level()),
                     },
                 );
+
+                }
 
                 if orch.state().tick_count % 100 == 0 && orch.state().tick_count > 0 {
                     let p = brain.persistence.lock();
@@ -2367,7 +2404,7 @@ pub async fn run(
         }
 
         // Auto-save assistant response to daily log
-        if config.memory.auto_save {
+        if config.memory.auto_save && !is_recall_content(&response) {
             let summary = truncate_with_ellipsis(&response, 100);
             let response_key = autosave_memory_key("assistant_resp");
             let _ = mem
@@ -2469,7 +2506,7 @@ pub async fn run(
                 }
             }
 
-            if config.memory.auto_save {
+            if config.memory.auto_save && !is_recall_content(&user_input) {
                 let user_key = autosave_memory_key("user_msg");
                 let _ = mem
                     .store(&user_key, &user_input, MemoryCategory::Conversation, None)
@@ -2568,7 +2605,7 @@ pub async fn run(
             // Hard cap as a safety net.
             trim_history(&mut history, config.agent.max_history_messages);
 
-            if config.memory.auto_save {
+            if config.memory.auto_save && !is_recall_content(&response) {
                 let summary = truncate_with_ellipsis(&response, 100);
                 let response_key = autosave_memory_key("assistant_resp");
                 let _ = mem
@@ -3298,6 +3335,17 @@ Done."#;
         assert!(history[1].content.contains("Compaction summary"));
         assert!(history[2].content.contains("recent 1"));
         assert!(history[3].content.contains("recent 2"));
+    }
+
+    #[test]
+    fn is_recall_content_detects_memory_context_marker() {
+        assert!(is_recall_content("[Memory context]\n- key: value\n"));
+        assert!(is_recall_content("[Recall] previous data"));
+        assert!(is_recall_content("[Hardware context]\n- pin: 13"));
+        assert!(is_recall_content("  [Memory context]\nindented"));
+        assert!(!is_recall_content("Hello, how are you?"));
+        assert!(!is_recall_content("The [Memory context] is embedded"));
+        assert!(!is_recall_content(""));
     }
 
     #[test]
