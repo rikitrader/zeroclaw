@@ -14,12 +14,10 @@ impl ResearchClawTool {
         Self {
             claw_path: claw_path.unwrap_or_else(|| {
                 std::env::var("RESEARCHCLAW_PATH").unwrap_or_else(|_| {
-                    let workspace = std::env::var("ZEROCLAW_WORKSPACE")
-                        .unwrap_or_else(|_| ".".to_string());
+                    let workspace =
+                        std::env::var("ZEROCLAW_WORKSPACE").unwrap_or_else(|_| ".".to_string());
                     let base = std::path::Path::new(&workspace);
-                    base.join("AutoResearchClaw")
-                        .to_string_lossy()
-                        .into_owned()
+                    base.join("AutoResearchClaw").to_string_lossy().into_owned()
                 })
             }),
             config_path: config_path.unwrap_or_else(|| {

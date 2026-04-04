@@ -2123,38 +2123,40 @@ pub async fn run(
 
                 let meta = orch.metacognition();
                 if orch.state().tick_count % 10 == 0 {
-                crate::gateway::update_consciousness_snapshot(
-                    crate::gateway::ConsciousnessSnapshot {
-                        enabled: true,
-                        coherence: tick_result.coherence,
-                        tick_count: orch.state().tick_count,
-                        last_tick_proposals: tick_result.proposals_generated,
-                        last_tick_approved: tick_result.proposals_approved,
-                        last_tick_vetoed: tick_result.proposals_vetoed,
-                        last_tick_contradictions: tick_result.contradictions.len(),
-                        phenomenal: serde_json::to_value(tick_result.phenomenal).ok(),
-                        flow_state: serde_json::to_value(&tick_result.flow_state).ok(),
-                        wisdom_count: Some(tick_result.wisdom_count),
-                        somatic_marker_count: Some(tick_result.somatic_marker_count),
-                        theory_of_mind_count: Some(tick_result.theory_of_mind_count),
-                        collective_field,
-                        metacognition_observation_count: Some(meta.observations().len()),
-                        metacognition_adjustment_count: Some(meta.adjustments().len()),
-                        collective_peer_states,
-                        metacognition_observations: serde_json::to_value(meta.observations()).ok(),
-                        metacognition_adjustments: serde_json::to_value(meta.adjustments()).ok(),
-                        narrative_theme_count: Some(tick_result.narrative_theme_count),
-                        prediction_accuracy: Some(tick_result.prediction_accuracy),
-                        enactive_success_rate: Some(tick_result.enactive_success_rate),
-                        modulators: serde_json::to_value(tick_result.modulators).ok(),
-                        ncn_signals: serde_json::to_value(tick_result.ncn_signals).ok(),
-                        neuro_history: serde_json::to_value(orch.neuromodulation().history()).ok(),
-                        exploration_drive: Some(orch.neuromodulation().exploration_drive()),
-                        conservation_drive: Some(orch.neuromodulation().conservation_drive()),
-                        stress_level: Some(orch.neuromodulation().stress_level()),
-                    },
-                );
-
+                    crate::gateway::update_consciousness_snapshot(
+                        crate::gateway::ConsciousnessSnapshot {
+                            enabled: true,
+                            coherence: tick_result.coherence,
+                            tick_count: orch.state().tick_count,
+                            last_tick_proposals: tick_result.proposals_generated,
+                            last_tick_approved: tick_result.proposals_approved,
+                            last_tick_vetoed: tick_result.proposals_vetoed,
+                            last_tick_contradictions: tick_result.contradictions.len(),
+                            phenomenal: serde_json::to_value(tick_result.phenomenal).ok(),
+                            flow_state: serde_json::to_value(&tick_result.flow_state).ok(),
+                            wisdom_count: Some(tick_result.wisdom_count),
+                            somatic_marker_count: Some(tick_result.somatic_marker_count),
+                            theory_of_mind_count: Some(tick_result.theory_of_mind_count),
+                            collective_field,
+                            metacognition_observation_count: Some(meta.observations().len()),
+                            metacognition_adjustment_count: Some(meta.adjustments().len()),
+                            collective_peer_states,
+                            metacognition_observations: serde_json::to_value(meta.observations())
+                                .ok(),
+                            metacognition_adjustments: serde_json::to_value(meta.adjustments())
+                                .ok(),
+                            narrative_theme_count: Some(tick_result.narrative_theme_count),
+                            prediction_accuracy: Some(tick_result.prediction_accuracy),
+                            enactive_success_rate: Some(tick_result.enactive_success_rate),
+                            modulators: serde_json::to_value(tick_result.modulators).ok(),
+                            ncn_signals: serde_json::to_value(tick_result.ncn_signals).ok(),
+                            neuro_history: serde_json::to_value(orch.neuromodulation().history())
+                                .ok(),
+                            exploration_drive: Some(orch.neuromodulation().exploration_drive()),
+                            conservation_drive: Some(orch.neuromodulation().conservation_drive()),
+                            stress_level: Some(orch.neuromodulation().stress_level()),
+                        },
+                    );
                 }
 
                 if orch.state().tick_count % 100 == 0 && orch.state().tick_count > 0 {

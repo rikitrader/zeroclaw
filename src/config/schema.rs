@@ -318,9 +318,7 @@ impl BotRateLimiter {
 
     pub fn tokens_remaining(&self) -> u64 {
         self.maybe_reset_window();
-        let used = self
-            .tokens_used
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let used = self.tokens_used.load(std::sync::atomic::Ordering::Relaxed);
         self.max_tokens_per_minute.saturating_sub(used)
     }
 
@@ -1184,6 +1182,9 @@ pub struct BrowserConfig {
     /// Computer-use sidecar configuration
     #[serde(default)]
     pub computer_use: BrowserComputerUseConfig,
+    /// Browser-use agentic sidecar configuration
+    #[serde(default)]
+    pub browser_use: crate::tools::browser_use::BrowserUseConfig,
 }
 
 fn default_browser_backend() -> String {
@@ -1205,6 +1206,7 @@ impl Default for BrowserConfig {
             native_webdriver_url: default_browser_webdriver_url(),
             native_chrome_path: None,
             computer_use: BrowserComputerUseConfig::default(),
+            browser_use: crate::tools::browser_use::BrowserUseConfig::default(),
         }
     }
 }
@@ -5056,6 +5058,7 @@ default_temperature = 0.7
                 max_coordinate_x: Some(3840),
                 max_coordinate_y: Some(2160),
             },
+            browser_use: crate::tools::browser_use::BrowserUseConfig::default(),
         };
         let toml_str = toml::to_string(&b).unwrap();
         let parsed: BrowserConfig = toml::from_str(&toml_str).unwrap();

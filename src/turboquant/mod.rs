@@ -6,8 +6,7 @@
     clippy::manual_midpoint,
     clippy::manual_div_ceil,
     clippy::excessive_precision,
-    clippy::needless_range_loop,
-    clippy::semicolon_if_nothing_returned
+    clippy::needless_range_loop
 )]
 
 use rand::Rng;
@@ -42,7 +41,11 @@ impl LloydMaxCodebook {
 
             let mut new_centroids = Vec::with_capacity(n_levels);
             for i in 0..n_levels {
-                let lo = if i == 0 { -6.0 * sigma } else { boundaries[i - 1] };
+                let lo = if i == 0 {
+                    -6.0 * sigma
+                } else {
+                    boundaries[i - 1]
+                };
                 let hi = if i == n_levels - 1 {
                     6.0 * sigma
                 } else {
@@ -179,7 +182,11 @@ fn compute_distortion(centroids: &[f64], boundaries: &[f64], sigma: f64) -> f64 
     let mut total = 0.0;
 
     for i in 0..n {
-        let lo = if i == 0 { -6.0 * sigma } else { boundaries[i - 1] };
+        let lo = if i == 0 {
+            -6.0 * sigma
+        } else {
+            boundaries[i - 1]
+        };
         let hi = if i == n - 1 {
             6.0 * sigma
         } else {
@@ -221,7 +228,10 @@ pub fn generate_rotation_matrix(d: usize, seed: u64) -> Vec<Vec<f64>> {
                 matrix[i][k] -= dot * matrix[j][k];
             }
         }
-        let norm: f64 = (0..d).map(|k| matrix[i][k] * matrix[i][k]).sum::<f64>().sqrt();
+        let norm: f64 = (0..d)
+            .map(|k| matrix[i][k] * matrix[i][k])
+            .sum::<f64>()
+            .sqrt();
         if norm > 1e-10 {
             for k in 0..d {
                 matrix[i][k] /= norm;
@@ -282,7 +292,8 @@ impl TurboQuantMSE {
 
     fn rotation(&mut self) -> &Vec<Vec<f64>> {
         if self.rotation_cache.is_none() {
-            self.rotation_cache = Some(generate_rotation_matrix(self.dimension, self.rotation_seed));
+            self.rotation_cache =
+                Some(generate_rotation_matrix(self.dimension, self.rotation_seed));
         }
         self.rotation_cache.as_ref().unwrap()
     }
@@ -298,14 +309,18 @@ impl TurboQuantMSE {
         let rotated = mat_vec_multiply(&rotation, &normalized);
         let scale = (self.dimension as f64).sqrt();
 
-        let indices: Vec<u8> = rotated.iter().map(|&y| self.codebook.quantize(y * scale)).collect();
+        let indices: Vec<u8> = rotated
+            .iter()
+            .map(|&y| self.codebook.quantize(y * scale))
+            .collect();
 
         let reconstructed_rotated: Vec<f64> = indices
             .iter()
             .map(|&idx| self.codebook.dequantize(idx) / scale)
             .collect();
 
-        let reconstructed_normalized = mat_transpose_vec_multiply(&rotation, &reconstructed_rotated);
+        let reconstructed_normalized =
+            mat_transpose_vec_multiply(&rotation, &reconstructed_rotated);
         let reconstructed: Vec<f64> = reconstructed_normalized.iter().map(|v| v * norm).collect();
 
         (indices, reconstructed)
@@ -319,7 +334,8 @@ impl TurboQuantMSE {
             .collect();
 
         let rotation = self.rotation().clone();
-        let reconstructed_normalized = mat_transpose_vec_multiply(&rotation, &reconstructed_rotated);
+        let reconstructed_normalized =
+            mat_transpose_vec_multiply(&rotation, &reconstructed_rotated);
         reconstructed_normalized.iter().map(|v| v * norm).collect()
     }
 }
@@ -357,8 +373,7 @@ impl TurboQuantProd {
 
     fn qjl_matrix(&mut self) -> &Vec<Vec<f64>> {
         if self.qjl_cache.is_none() {
-            self.qjl_cache =
-                Some(generate_rotation_matrix(self.mse.dimension, self.qjl_seed));
+            self.qjl_cache = Some(generate_rotation_matrix(self.mse.dimension, self.qjl_seed));
         }
         self.qjl_cache.as_ref().unwrap()
     }
@@ -390,7 +405,9 @@ impl TurboQuantProd {
     }
 
     pub fn inner_product(&mut self, query: &[f64], compressed: &CompressedVector) -> f64 {
-        let x_mse = self.mse.dequantize(&compressed.mse_indices, compressed.original_norm);
+        let x_mse = self
+            .mse
+            .dequantize(&compressed.mse_indices, compressed.original_norm);
         let term1 = dot_product(query, &x_mse);
 
         if compressed.residual_norm < 1e-15 {
@@ -439,7 +456,13 @@ impl CompressedMemoryStore {
         }
     }
 
-    pub fn store(&mut self, vector: &[f64], tick: u64, domain: String, metadata: serde_json::Value) {
+    pub fn store(
+        &mut self,
+        vector: &[f64],
+        tick: u64,
+        domain: String,
+        metadata: serde_json::Value,
+    ) {
         if self.entries.len() >= self.capacity {
             self.entries.remove(0);
         }
@@ -486,14 +509,18 @@ impl CompressedMemoryStore {
     }
 
     pub fn memory_bytes(&self) -> usize {
-        self.entries.iter().map(|e| e.compressed.storage_bytes()).sum()
+        self.entries
+            .iter()
+            .map(|e| e.compressed.storage_bytes())
+            .sum()
     }
 
     pub fn compression_ratio(&self, original_element_bytes: usize) -> f64 {
         if self.entries.is_empty() {
             return 0.0;
         }
-        let original = self.entries.len() * self.entries[0].compressed.dimension * original_element_bytes;
+        let original =
+            self.entries.len() * self.entries[0].compressed.dimension * original_element_bytes;
         let compressed = self.memory_bytes();
         if compressed == 0 {
             0.0

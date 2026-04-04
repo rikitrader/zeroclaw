@@ -302,8 +302,7 @@ impl Memory for PostgresMemory {
             let mut client = client.lock();
             let deleted = match cat {
                 Some(c) => {
-                    let stmt =
-                        format!("DELETE FROM {qualified_table} WHERE category = $1");
+                    let stmt = format!("DELETE FROM {qualified_table} WHERE category = $1");
                     client.execute(&stmt, &[&c])?
                 }
                 None => {

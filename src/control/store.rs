@@ -74,7 +74,9 @@ impl ControlStore {
         let db_path = workspace.join("control.db");
         let conn = Connection::open(&db_path)
             .with_context(|| format!("open control store at {}", db_path.display()))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
+        )?;
         let store = Self {
             db: Arc::new(Mutex::new(conn)),
         };

@@ -1,5 +1,6 @@
 pub mod browser;
 pub mod browser_open;
+pub mod browser_use;
 pub mod composio;
 pub mod cron_add;
 pub mod cron_list;
@@ -53,6 +54,7 @@ pub mod web_search_tool;
 
 pub use browser::{BrowserTool, ComputerUseConfig};
 pub use browser_open::BrowserOpenTool;
+pub use browser_use::BrowserUseTool;
 pub use composio::ComposioTool;
 pub use cron_add::CronAddTool;
 pub use cron_list::CronListTool;
@@ -244,6 +246,13 @@ pub fn all_tools_with_runtime(
                 max_coordinate_x: browser_config.computer_use.max_coordinate_x,
                 max_coordinate_y: browser_config.computer_use.max_coordinate_y,
             },
+        )));
+    }
+
+    if browser_config.browser_use.enabled {
+        tools.push(Box::new(BrowserUseTool::new(
+            security.clone(),
+            browser_config.browser_use.clone(),
         )));
     }
 

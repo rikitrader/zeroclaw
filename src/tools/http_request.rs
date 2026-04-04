@@ -441,22 +441,17 @@ async fn validate_resolved_ip(url: &str) -> anyhow::Result<()> {
     if host.parse::<std::net::IpAddr>().is_ok() {
         return Ok(());
     }
-    let addrs: Vec<std::net::SocketAddr> =
-        tokio::net::lookup_host(format!("{host}:0"))
-            .await?
-            .collect();
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host(format!("{host}:0"))
+        .await?
+        .collect();
     for addr in &addrs {
         let ip = addr.ip();
         match ip {
             std::net::IpAddr::V4(v4) if is_non_global_v4(v4) => {
-                anyhow::bail!(
-                    "DNS rebind blocked: {host} resolved to private IP {v4}"
-                );
+                anyhow::bail!("DNS rebind blocked: {host} resolved to private IP {v4}");
             }
             std::net::IpAddr::V6(v6) if is_non_global_v6(v6) => {
-                anyhow::bail!(
-                    "DNS rebind blocked: {host} resolved to private IP {v6}"
-                );
+                anyhow::bail!("DNS rebind blocked: {host} resolved to private IP {v6}");
             }
             _ => {}
         }

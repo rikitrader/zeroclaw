@@ -261,10 +261,7 @@ mod tests {
             .execute(json!({"image_url": "https://localhost/img.png", "prompt": "describe"}))
             .await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("private/internal"));
+        assert!(result.unwrap_err().to_string().contains("private/internal"));
     }
 
     #[tokio::test]

@@ -262,10 +262,7 @@ fn bot_rate_limiter_token_tracking() {
         "900 of 1000 should be within budget"
     );
     assert_eq!(limiter.tokens_remaining(), 100);
-    assert!(
-        !limiter.record_tokens(200),
-        "1100 exceeds 1000 budget"
-    );
+    assert!(!limiter.record_tokens(200), "1100 exceeds 1000 budget");
 }
 
 #[test]

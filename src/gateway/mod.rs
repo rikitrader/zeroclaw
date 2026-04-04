@@ -1803,10 +1803,7 @@ mod tests {
             Ok(false)
         }
 
-        async fn clear(
-            &self,
-            _category: Option<&MemoryCategory>,
-        ) -> anyhow::Result<usize> {
+        async fn clear(&self, _category: Option<&MemoryCategory>) -> anyhow::Result<usize> {
             Ok(0)
         }
 
@@ -1888,10 +1885,7 @@ mod tests {
             Ok(false)
         }
 
-        async fn clear(
-            &self,
-            _category: Option<&MemoryCategory>,
-        ) -> anyhow::Result<usize> {
+        async fn clear(&self, _category: Option<&MemoryCategory>) -> anyhow::Result<usize> {
             Ok(0)
         }
 
