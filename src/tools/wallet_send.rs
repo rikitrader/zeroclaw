@@ -110,7 +110,7 @@ mod tests {
     }
 
     fn test_provider() -> Arc<EvmProvider> {
-        Arc::new(EvmProvider::connect("https://rpc.sepolia.org", 11155111).unwrap())
+        Arc::new(EvmProvider::connect("https://rpc.sepolia.org", 11_155_111).unwrap())
     }
 
     #[test]

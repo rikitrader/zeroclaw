@@ -96,7 +96,7 @@ mod tests {
             .unwrap();
         let amount = U256::from(100_000u64);
 
-        let signed = Eip712Signer::sign_payment(&kp, recipient, amount, 1, 9999999999, 1)
+        let signed = Eip712Signer::sign_payment(&kp, recipient, amount, 1, 9_999_999_999, 1)
             .await
             .unwrap();
 
@@ -116,10 +116,10 @@ mod tests {
             .unwrap();
         let amount = U256::from(100u64);
 
-        let sig1 = Eip712Signer::sign_payment(&kp, recipient, amount, 1, 9999999999, 1)
+        let sig1 = Eip712Signer::sign_payment(&kp, recipient, amount, 1, 9_999_999_999, 1)
             .await
             .unwrap();
-        let sig2 = Eip712Signer::sign_payment(&kp, recipient, amount, 2, 9999999999, 1)
+        let sig2 = Eip712Signer::sign_payment(&kp, recipient, amount, 2, 9_999_999_999, 1)
             .await
             .unwrap();
 
@@ -134,10 +134,10 @@ mod tests {
             .unwrap();
         let amount = U256::from(100u64);
 
-        let sig_mainnet = Eip712Signer::sign_payment(&kp, recipient, amount, 1, 9999999999, 1)
+        let sig_mainnet = Eip712Signer::sign_payment(&kp, recipient, amount, 1, 9_999_999_999, 1)
             .await
             .unwrap();
-        let sig_base = Eip712Signer::sign_payment(&kp, recipient, amount, 1, 9999999999, 8453)
+        let sig_base = Eip712Signer::sign_payment(&kp, recipient, amount, 1, 9_999_999_999, 8453)
             .await
             .unwrap();
 
@@ -151,7 +151,7 @@ mod tests {
             recipient: "0xccdd".to_string(),
             amount: "100000".to_string(),
             nonce: 1,
-            expiry: 9999999999,
+            expiry: 9_999_999_999,
             chain_id: 1,
             signature: "0xabcdef".to_string(),
         };

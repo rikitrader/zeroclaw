@@ -111,17 +111,17 @@ mod tests {
 
     #[test]
     fn connect_accepts_valid_url() {
-        let provider = EvmProvider::connect("https://rpc.sepolia.org", 11155111);
+        let provider = EvmProvider::connect("https://rpc.sepolia.org", 11_155_111);
         assert!(provider.is_ok());
-        assert_eq!(provider.unwrap().chain_id(), 11155111);
+        assert_eq!(provider.unwrap().chain_id(), 11_155_111);
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "live network test — requires Sepolia RPC reachability"]
     async fn sepolia_get_balance() {
         let rpc = std::env::var("ZEROCLAW_TEST_RPC_URL")
             .unwrap_or_else(|_| "https://rpc.sepolia.org".to_string());
-        let provider = EvmProvider::connect(&rpc, 11155111).unwrap();
+        let provider = EvmProvider::connect(&rpc, 11_155_111).unwrap();
         let zero_addr: Address = "0x0000000000000000000000000000000000000000"
             .parse()
             .unwrap();
@@ -130,11 +130,11 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "live network test — requires Sepolia RPC reachability"]
     async fn sepolia_token_balance() {
         let rpc = std::env::var("ZEROCLAW_TEST_RPC_URL")
             .unwrap_or_else(|_| "https://rpc.sepolia.org".to_string());
-        let provider = EvmProvider::connect(&rpc, 11155111).unwrap();
+        let provider = EvmProvider::connect(&rpc, 11_155_111).unwrap();
         let token: Address = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
             .parse()
             .unwrap();
@@ -144,14 +144,14 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "live network test — requires Sepolia RPC + funded test key"]
     async fn sepolia_send_and_receipt() {
         let rpc = std::env::var("ZEROCLAW_TEST_RPC_URL")
             .expect("Set ZEROCLAW_TEST_RPC_URL for network tests");
         let key = std::env::var("ZEROCLAW_TEST_FUNDED_KEY")
             .expect("Set ZEROCLAW_TEST_FUNDED_KEY (hex private key with Sepolia ETH)");
 
-        let provider = EvmProvider::connect(&rpc, 11155111).unwrap();
+        let provider = EvmProvider::connect(&rpc, 11_155_111).unwrap();
         let keypair = WalletKeypair::from_hex(&key).unwrap();
         let to: Address = "0x0000000000000000000000000000000000000001"
             .parse()

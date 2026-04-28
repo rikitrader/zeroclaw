@@ -34,11 +34,7 @@ impl WalletPayTool {
             .cost_tracker
             .as_ref()
             .and_then(|ct| ct.get_summary().ok())
-            .map(|s| {
-                let daily = (s.daily_cost_usd * 100.0).round() as u64;
-                let monthly = (s.monthly_cost_usd * 100.0).round() as u64;
-                (daily, monthly)
-            })
+            .map(|s| (f64_to_cents(s.daily_cost_usd), f64_to_cents(s.monthly_cost_usd)))
             .unwrap_or((0, 0));
 
         TreasuryLimits {
@@ -111,6 +107,26 @@ impl Tool for WalletPayTool {
     }
 }
 
+/// Convert a USD amount (f64) to whole cents (u64) safely.
+///
+/// NaN, infinite, and negative values clamp to 0 — treasury spend cannot
+/// be negative or undefined. Values exceeding `u64::MAX` cents saturate
+/// to `u64::MAX`. The final cast is safe by construction (finite,
+/// non-negative, bounded), so the clippy lints are explicitly silenced.
+fn f64_to_cents(usd: f64) -> u64 {
+    if !usd.is_finite() || usd <= 0.0 {
+        return 0;
+    }
+    let cents = (usd * 100.0).round();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+    if cents >= u64::MAX as f64 {
+        u64::MAX
+    } else {
+        // Safe: cents is finite, > 0, and < u64::MAX as f64 here.
+        cents as u64
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +193,38 @@ mod tests {
         let tool = WalletPayTool::new(store, test_treasury());
         let result = tool.execute(json!({})).await;
         assert!(result.is_err());
+    }
+
+    // ── §1.2 f64_to_cents safe conversion ─────────────────────────
+
+    #[test]
+    fn f64_to_cents_normal() {
+        assert_eq!(f64_to_cents(1.00), 100);
+        assert_eq!(f64_to_cents(9.99), 999);
+        assert_eq!(f64_to_cents(0.01), 1);
+        assert_eq!(f64_to_cents(123.456), 12_346); // round-half-to-even default
+    }
+
+    #[test]
+    fn f64_to_cents_zero_and_negative_clamp_to_zero() {
+        assert_eq!(f64_to_cents(0.0), 0);
+        assert_eq!(f64_to_cents(-0.0), 0);
+        assert_eq!(f64_to_cents(-1.00), 0);
+        assert_eq!(f64_to_cents(-1_000_000.0), 0);
+    }
+
+    #[test]
+    fn f64_to_cents_nan_and_infinity_clamp_to_zero() {
+        assert_eq!(f64_to_cents(f64::NAN), 0);
+        assert_eq!(f64_to_cents(f64::INFINITY), 0);
+        assert_eq!(f64_to_cents(f64::NEG_INFINITY), 0);
+    }
+
+    #[test]
+    fn f64_to_cents_oversize_saturates_to_max() {
+        // Anything above u64::MAX cents saturates rather than wrapping.
+        assert_eq!(f64_to_cents(f64::MAX), u64::MAX);
+        // 1e20 USD -> 1e22 cents > u64::MAX (~1.8e19).
+        assert_eq!(f64_to_cents(1.0e20), u64::MAX);
     }
 }
