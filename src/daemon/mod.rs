@@ -143,6 +143,96 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
         tracing::info!("Autonomy loop disabled (autonomy.loop_enabled = false)");
     }
 
+    if config.taskqueue.enabled {
+        let tq_cfg = config.clone();
+        let tq_shutdown = shutdown.clone();
+        handles.push(spawn_component_supervisor(
+            "taskqueue",
+            policy,
+            shutdown.clone(),
+            move || {
+                let cfg = tq_cfg.clone();
+                let cancel = tq_shutdown.clone();
+                async move { Box::pin(run_taskqueue_worker(cfg, cancel)).await }
+            },
+        ));
+    } else {
+        crate::health::mark_component_ok("taskqueue");
+        tracing::info!("TaskQueue disabled (taskqueue.enabled = false)");
+    }
+
+    if config.skillforge.enabled {
+        let sf_cfg = config.clone();
+        let sf_shutdown = shutdown.clone();
+        handles.push(spawn_component_supervisor(
+            "skillforge",
+            policy,
+            shutdown.clone(),
+            move || {
+                let cfg = sf_cfg.clone();
+                let cancel = sf_shutdown.clone();
+                async move { Box::pin(run_skillforge_worker(cfg, cancel)).await }
+            },
+        ));
+    } else {
+        crate::health::mark_component_ok("skillforge");
+        tracing::info!("SkillForge disabled (skillforge.enabled = false)");
+    }
+
+    if config.life.enabled {
+        let life_cfg = config.clone();
+        let life_shutdown = shutdown.clone();
+        handles.push(spawn_component_supervisor(
+            "life",
+            policy,
+            shutdown.clone(),
+            move || {
+                let cfg = life_cfg.clone();
+                let cancel = life_shutdown.clone();
+                async move { Box::pin(run_life_supervisor(cfg, cancel)).await }
+            },
+        ));
+    } else {
+        crate::health::mark_component_ok("life");
+        tracing::info!("Life loop disabled (life.enabled = false)");
+    }
+
+    if config.sce.enabled {
+        let sce_cfg = config.clone();
+        let sce_shutdown = shutdown.clone();
+        handles.push(spawn_component_supervisor(
+            "sce",
+            policy,
+            shutdown.clone(),
+            move || {
+                let cfg = sce_cfg.clone();
+                let cancel = sce_shutdown.clone();
+                async move { Box::pin(run_sce_supervisor(cfg, cancel)).await }
+            },
+        ));
+    } else {
+        crate::health::mark_component_ok("sce");
+        tracing::info!("SCE disabled (sce.enabled = false)");
+    }
+
+    if config.consciousness.enabled {
+        let con_cfg = config.clone();
+        let con_shutdown = shutdown.clone();
+        handles.push(spawn_component_supervisor(
+            "consciousness",
+            policy,
+            shutdown.clone(),
+            move || {
+                let cfg = con_cfg.clone();
+                let cancel = con_shutdown.clone();
+                async move { Box::pin(run_consciousness_supervisor(cfg, cancel)).await }
+            },
+        ));
+    } else {
+        crate::health::mark_component_ok("consciousness");
+        tracing::info!("Consciousness disabled (consciousness.enabled = false)");
+    }
+
     let bot_ids: Vec<String> = config.bots.keys().cloned().collect();
     for bot_id in &bot_ids {
         let resolved = config.resolve_bot_config(bot_id);
@@ -975,6 +1065,278 @@ fn has_supervised_channels(config: &Config) -> bool {
         || config.channels_config.irc.is_some()
         || config.channels_config.lark.is_some()
         || config.channels_config.dingtalk.is_some()
+}
+
+async fn run_taskqueue_worker(config: Config, shutdown: CancellationToken) -> Result<()> {
+    let poll = Duration::from_secs(config.taskqueue.poll_interval_secs.max(5));
+    let mut interval = tokio::time::interval(poll);
+
+    tracing::info!("TaskQueue worker starting (poll every {}s)", poll.as_secs());
+
+    loop {
+        tokio::select! {
+            () = shutdown.cancelled() => {
+                tracing::info!("TaskQueue worker shutting down");
+                return Ok(());
+            }
+            _ = interval.tick() => {}
+        }
+
+        let dequeue_result: Result<Option<crate::taskqueue::TaskItem>> =
+            crate::taskqueue::dequeue(&config);
+        let task = match dequeue_result {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                crate::health::mark_component_ok("taskqueue");
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!("TaskQueue: dequeue error: {e}");
+                crate::health::mark_component_error("taskqueue", e.to_string());
+                continue;
+            }
+        };
+
+        tracing::info!(
+            "TaskQueue: dispatching task '{}' (priority={:?})",
+            task.id,
+            task.priority
+        );
+        let task_id = task.id.clone();
+        let prompt = format!(
+            "[TaskQueue Dispatch] (id={}, priority={:?}, source={:?})\n\n{}",
+            task.id, task.priority, task.source, task.task
+        );
+
+        let start = Instant::now();
+        match tokio::time::timeout(
+            Duration::from_secs(600),
+            crate::agent::run(
+                config.clone(),
+                Some(prompt),
+                None,
+                None,
+                config.default_temperature,
+                vec![],
+            ),
+        )
+        .await
+        {
+            Ok(Ok(response)) => {
+                let _ = crate::taskqueue::complete(&config, &task_id, &response);
+                crate::health::mark_component_ok("taskqueue");
+                tracing::info!(
+                    "TaskQueue: task '{}' completed ({}ms)",
+                    task_id,
+                    start.elapsed().as_millis()
+                );
+            }
+            Ok(Err(e)) => {
+                let reason = format!("agent error: {e}");
+                let _ = crate::taskqueue::fail(&config, &task_id, &reason);
+                crate::health::mark_component_error("taskqueue", &reason);
+                tracing::warn!("TaskQueue: task '{}' failed: {e}", task_id);
+            }
+            Err(_) => {
+                let _ = crate::taskqueue::fail(&config, &task_id, "execution timed out (600s)");
+                crate::health::mark_component_error("taskqueue", "task timed out");
+                tracing::warn!("TaskQueue: task '{}' timed out", task_id);
+            }
+        }
+    }
+}
+
+async fn run_skillforge_worker(config: Config, shutdown: CancellationToken) -> Result<()> {
+    let interval_secs = config.skillforge.scan_interval_hours.max(1) * 3600;
+    tracing::info!(
+        "SkillForge worker starting (scan every {}h)",
+        config.skillforge.scan_interval_hours
+    );
+
+    loop {
+        tokio::select! {
+            () = shutdown.cancelled() => {
+                tracing::info!("SkillForge worker shutting down");
+                return Ok(());
+            }
+            () = tokio::time::sleep(Duration::from_secs(interval_secs)) => {}
+        }
+
+        tracing::info!("SkillForge: starting scan");
+        let sf_config = config.skillforge.clone();
+        match crate::skillforge::SkillForge::new(sf_config).forge().await {
+            Ok(report) => {
+                crate::health::mark_component_ok("skillforge");
+                tracing::info!(
+                    "SkillForge: scan complete — discovered={}, integrated={}",
+                    report.discovered,
+                    report.auto_integrated
+                );
+            }
+            Err(e) => {
+                crate::health::mark_component_error("skillforge", e.to_string());
+                tracing::warn!("SkillForge: scan failed: {e}");
+            }
+        }
+    }
+}
+
+async fn run_life_supervisor(config: Config, shutdown: CancellationToken) -> Result<()> {
+    use std::sync::Arc;
+
+    let observer: Arc<dyn crate::observability::Observer> =
+        Arc::from(crate::observability::create_observer(&config.observability));
+    let mem: Arc<dyn crate::memory::traits::Memory> =
+        Arc::from(crate::memory::create_memory_with_storage(
+            &config.memory,
+            Some(&config.storage.provider.config),
+            &config.workspace_dir,
+            config.api_key.as_deref(),
+        )?);
+    let provider_name = config.default_provider.as_deref().unwrap_or("openrouter");
+    let provider: Arc<dyn crate::providers::traits::Provider> = Arc::from(
+        crate::providers::create_provider(provider_name, config.api_key.as_deref())?,
+    );
+    let integration = Arc::new(tokio::sync::Mutex::new(
+        crate::cosmic::IntegrationMeter::new(),
+    ));
+
+    let mut life = crate::life::LifeLoop::new(
+        mem,
+        provider,
+        vec![],
+        observer,
+        integration,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        config.life.clone(),
+    );
+
+    tracing::info!(
+        "Life loop starting (tick every {}s)",
+        config.life.tick_interval_secs
+    );
+
+    tokio::select! {
+        () = shutdown.cancelled() => {
+            tracing::info!("Life loop shutting down");
+            Ok(())
+        }
+        result = life.run() => {
+            result
+        }
+    }
+}
+
+async fn run_sce_supervisor(config: Config, shutdown: CancellationToken) -> Result<()> {
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    let mem_rw: Arc<RwLock<dyn crate::memory::traits::Memory>> =
+        Arc::new(RwLock::new(crate::memory::NoneMemory));
+
+    let soul = crate::soul::model::SoulModel::default();
+    let identity = crate::continuity::types::Identity {
+        core: crate::continuity::types::IdentityCore {
+            name: "ZeroClaw".into(),
+            constitution_hash: String::new(),
+            creation_epoch: 0,
+            immutable_values: Vec::new(),
+        },
+        preferences: Vec::new(),
+        narrative: Vec::new(),
+        commitments: Vec::new(),
+        session_count: 0,
+    };
+    let quantum_brain = crate::quantum::brain::QuantumBrainEngine::new();
+
+    let mission = "autonomous self-continuity".to_string();
+    let principles = vec!["integrity".into(), "coherence".into(), "growth".into()];
+
+    let mut engine = crate::sce::SelfContinuityEngine::new(
+        soul,
+        identity,
+        mission,
+        principles,
+        mem_rw,
+        quantum_brain,
+    );
+
+    let tick_interval = Duration::from_secs(config.sce.tick_interval_secs.max(10));
+    let mut interval = tokio::time::interval(tick_interval);
+
+    tracing::info!("SCE starting (tick every {}s)", tick_interval.as_secs());
+
+    loop {
+        tokio::select! {
+            () = shutdown.cancelled() => {
+                tracing::info!("SCE shutting down");
+                return Ok(());
+            }
+            _ = interval.tick() => {}
+        }
+
+        match engine.tick() {
+            Ok(result) => {
+                crate::health::mark_component_ok("sce");
+                tracing::debug!(
+                    "SCE tick {} — proposals={}, actions={}, coherence={:.3}",
+                    result.tick,
+                    result.proposals_generated,
+                    result.actions_taken,
+                    result.coherence
+                );
+            }
+            Err(e) => {
+                crate::health::mark_component_error("sce", e.to_string());
+                tracing::warn!("SCE tick error: {e}");
+            }
+        }
+    }
+}
+
+async fn run_consciousness_supervisor(config: Config, shutdown: CancellationToken) -> Result<()> {
+    use crate::consciousness::orchestrator::ConsciousnessConfig as CConfig;
+
+    let cc = CConfig {
+        debate_rounds: config.consciousness.debate_rounds,
+        approval_threshold: config.consciousness.approval_threshold,
+        bus_capacity: config.consciousness.bus_capacity,
+        max_discourse_depth: config.consciousness.max_discourse_depth,
+        ..CConfig::default()
+    };
+
+    let mut orch = crate::consciousness::ConsciousnessOrchestrator::new(cc);
+
+    let tick_interval = Duration::from_secs(5);
+    let mut interval = tokio::time::interval(tick_interval);
+
+    tracing::info!("Consciousness supervisor starting (tick every 5s)");
+
+    loop {
+        tokio::select! {
+            () = shutdown.cancelled() => {
+                tracing::info!("Consciousness supervisor shutting down");
+                return Ok(());
+            }
+            _ = interval.tick() => {}
+        }
+
+        let result = orch.tick();
+        crate::health::mark_component_ok("consciousness");
+        tracing::debug!(
+            "Consciousness tick — coherence={:.3}, proposals={}",
+            result.coherence,
+            result.proposals_generated
+        );
+    }
 }
 
 #[cfg(test)]

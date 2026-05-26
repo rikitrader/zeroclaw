@@ -185,6 +185,12 @@ pub struct Config {
     #[serde(default)]
     pub conscience: ConscienceConfig,
 
+    #[serde(default)]
+    pub taskqueue: TaskQueueConfig,
+
+    #[serde(default)]
+    pub sce: SceConfig,
+
     #[serde(default = "default_bot_max_memory_mb")]
     pub max_memory_mb: u64,
     #[serde(default = "default_bot_max_concurrent_requests")]
@@ -3199,6 +3205,10 @@ pub struct LifeConfig {
     pub initiative_cooldown_minutes: u32,
     pub dream_idle_hours: u32,
     pub emotional_persistence_path: String,
+    #[serde(default)]
+    pub initiative_model: Option<String>,
+    #[serde(default)]
+    pub preferred_channel: Option<String>,
 }
 
 impl Default for LifeConfig {
@@ -3211,6 +3221,8 @@ impl Default for LifeConfig {
             initiative_cooldown_minutes: 30,
             dream_idle_hours: 4,
             emotional_persistence_path: "data/emotional_state.json".to_string(),
+            initiative_model: None,
+            preferred_channel: None,
         }
     }
 }
@@ -3241,6 +3253,44 @@ impl Default for ConscienceConfig {
             allow_threshold: 0.80,
             ask_threshold: 0.55,
             block_threshold: 0.45,
+        }
+    }
+}
+
+// ── TaskQueue Config ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TaskQueueConfig {
+    pub enabled: bool,
+    pub poll_interval_secs: u64,
+    pub max_concurrent: u32,
+}
+
+impl Default for TaskQueueConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            poll_interval_secs: 30,
+            max_concurrent: 1,
+        }
+    }
+}
+
+// ── SCE Config ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SceConfig {
+    pub enabled: bool,
+    pub tick_interval_secs: u64,
+}
+
+impl Default for SceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            tick_interval_secs: 60,
         }
     }
 }
@@ -3310,6 +3360,8 @@ impl Default for Config {
             cognitive: CognitiveConfig::default(),
             life: LifeConfig::default(),
             conscience: ConscienceConfig::default(),
+            taskqueue: TaskQueueConfig::default(),
+            sce: SceConfig::default(),
             query_classification: QueryClassificationConfig::default(),
             max_memory_mb: default_bot_max_memory_mb(),
             max_concurrent_requests: default_bot_max_concurrent_requests(),
@@ -4235,6 +4287,8 @@ default_temperature = 0.7
             life: LifeConfig::default(),
             skillforge: SkillForgeConfig::default(),
             conscience: ConscienceConfig::default(),
+            taskqueue: TaskQueueConfig::default(),
+            sce: SceConfig::default(),
             max_memory_mb: 512,
             max_concurrent_requests: 10,
             max_tokens_per_minute: 100_000,
@@ -4392,6 +4446,8 @@ tool_dispatcher = "xml"
             life: LifeConfig::default(),
             skillforge: SkillForgeConfig::default(),
             conscience: ConscienceConfig::default(),
+            taskqueue: TaskQueueConfig::default(),
+            sce: SceConfig::default(),
             max_memory_mb: 512,
             max_concurrent_requests: 10,
             max_tokens_per_minute: 100_000,

@@ -112,6 +112,27 @@ impl Observer for LogObserver {
                     "consciousness.tick"
                 );
             }
+            ObserverEvent::LifeTick {
+                valence,
+                arousal,
+                curiosity,
+            } => {
+                info!(
+                    valence = %format!("{valence:.2}"),
+                    arousal = %format!("{arousal:.2}"),
+                    curiosity = %format!("{curiosity:.2}"),
+                    "life.tick"
+                );
+            }
+            ObserverEvent::LifeInitiative {
+                trigger,
+                message_preview,
+            } => {
+                info!(trigger = %trigger, preview = %message_preview, "life.initiative");
+            }
+            ObserverEvent::LifeDreamComplete { insight_preview } => {
+                info!(preview = %insight_preview, "life.dream");
+            }
         }
     }
 

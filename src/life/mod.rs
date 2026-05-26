@@ -45,6 +45,7 @@ pub struct LifeLoop {
 }
 
 impl LifeLoop {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         memory: Arc<dyn Memory>,
         provider: Arc<dyn Provider>,
@@ -151,14 +152,24 @@ impl LifeLoop {
                 );
                 meter.update_state("initiative", f64::from(state.curiosity).clamp(0.0, 1.0));
                 let snap = meter.snapshot();
-                tracing::debug!(phi = snap.phi, hub_ratio = snap.hub_ratio, "Life loop integration tick");
+                tracing::debug!(
+                    phi = snap.phi,
+                    hub_ratio = snap.hub_ratio,
+                    "Life loop integration tick"
+                );
             }
 
             if let Some(ref drift) = self.drift {
                 let mut d = drift.lock().await;
                 let state = self.emotional_state.lock().await;
-                d.record_sample("emotional_valence", f64::from(state.valence).clamp(0.0, 1.0));
-                d.record_sample("emotional_arousal", f64::from(state.arousal).clamp(0.0, 1.0));
+                d.record_sample(
+                    "emotional_valence",
+                    f64::from(state.valence).clamp(0.0, 1.0),
+                );
+                d.record_sample(
+                    "emotional_arousal",
+                    f64::from(state.arousal).clamp(0.0, 1.0),
+                );
             }
 
             if let Some(ref modulator) = self.modulator {
@@ -181,8 +192,8 @@ impl LifeLoop {
 
                     if let Some(ref wm) = self.world_model {
                         let mut wm = wm.lock().await;
-                        let health = result.merged_count as f64
-                            / result.total_remaining.max(1) as f64;
+                        let health =
+                            result.merged_count as f64 / result.total_remaining.max(1) as f64;
                         let confidence = (result.patterns_found as f32 * 0.1).min(1.0);
                         wm.update_belief(
                             "world:memory_consolidation_health",
@@ -190,8 +201,8 @@ impl LifeLoop {
                             confidence,
                             BeliefSource::Observed,
                         );
-                        let density = result.patterns_found as f64
-                            / result.total_remaining.max(1) as f64;
+                        let density =
+                            result.patterns_found as f64 / result.total_remaining.max(1) as f64;
                         wm.update_belief(
                             "world:memory_pattern_density",
                             density,
