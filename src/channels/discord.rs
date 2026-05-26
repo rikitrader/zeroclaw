@@ -14,6 +14,14 @@ pub struct DiscordChannel {
     listen_to_bots: bool,
     mention_only: bool,
     typing_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    gateway_session: Mutex<DiscordGatewaySession>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct DiscordGatewaySession {
+    session_id: Option<String>,
+    resume_gateway_url: Option<String>,
+    sequence: Option<i64>,
 }
 
 impl DiscordChannel {
@@ -30,6 +38,7 @@ impl DiscordChannel {
             allowed_users,
             listen_to_bots,
             mention_only,
+            gateway_session: Mutex::new(DiscordGatewaySession::default()),
             typing_handle: Mutex::new(None),
         }
     }
@@ -228,6 +237,7 @@ impl Channel for DiscordChannel {
     #[allow(clippy::too_many_lines)]
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         let bot_user_id = Self::bot_user_id_from_token(&self.bot_token).unwrap_or_default();
+        let mut had_ready = false;
 
         // Get Gateway URL
         let gw_resp: serde_json::Value = self
@@ -239,13 +249,25 @@ impl Channel for DiscordChannel {
             .json()
             .await?;
 
-        let gw_url = gw_resp
+        let fresh_gateway_url = gw_resp
             .get("url")
             .and_then(|u| u.as_str())
-            .unwrap_or("wss://gateway.discord.gg");
+            .unwrap_or("wss://gateway.discord.gg")
+            .to_string();
+        let session_snapshot = self.gateway_session.lock().clone();
+        let can_resume =
+            session_snapshot.session_id.is_some() && session_snapshot.sequence.is_some();
+        let gw_url = if can_resume {
+            session_snapshot
+                .resume_gateway_url
+                .clone()
+                .unwrap_or_else(|| fresh_gateway_url.clone())
+        } else {
+            fresh_gateway_url.clone()
+        };
 
         let ws_url = format!("{gw_url}/?v=10&encoding=json");
-        tracing::info!("Discord: connecting to gateway...");
+        tracing::info!(resume = can_resume, "Discord: connecting to gateway...");
 
         let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url).await?;
         let (mut write, mut read) = ws_stream.split();
@@ -259,26 +281,35 @@ impl Channel for DiscordChannel {
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(41250);
 
-        // Send Identify (opcode 2)
-        let identify = json!({
-            "op": 2,
-            "d": {
-                "token": self.bot_token,
-                "intents": 37377, // GUILDS | GUILD_MESSAGES | MESSAGE_CONTENT | DIRECT_MESSAGES
-                "properties": {
-                    "os": "linux",
-                    "browser": "zeroclaw",
-                    "device": "zeroclaw"
+        let mut sequence = session_snapshot.sequence.unwrap_or(-1);
+
+        if can_resume {
+            let resume = json!({
+                "op": 6,
+                "d": {
+                    "token": self.bot_token,
+                    "session_id": session_snapshot.session_id,
+                    "seq": session_snapshot.sequence,
                 }
-            }
-        });
-        write.send(Message::Text(identify.to_string())).await?;
-
-        tracing::info!("Discord: connected and identified");
-
-        // Track the last sequence number for heartbeats and resume.
-        // Only accessed in the select! loop below, so a plain i64 suffices.
-        let mut sequence: i64 = -1;
+            });
+            write.send(Message::Text(resume.to_string())).await?;
+            tracing::info!(sequence, "Discord: sent Resume");
+        } else {
+            let identify = json!({
+                "op": 2,
+                "d": {
+                    "token": self.bot_token,
+                    "intents": 37377,
+                    "properties": {
+                        "os": "linux",
+                        "browser": "zeroclaw",
+                        "device": "zeroclaw"
+                    }
+                }
+            });
+            write.send(Message::Text(identify.to_string())).await?;
+            tracing::info!("Discord: sent Identify");
+        }
 
         // Spawn heartbeat timer — sends a tick signal, actual heartbeat
         // is assembled in the select! loop where `sequence` lives.
@@ -308,7 +339,27 @@ impl Channel for DiscordChannel {
                 msg = read.next() => {
                     let msg = match msg {
                         Some(Ok(Message::Text(t))) => t,
-                        Some(Ok(Message::Close(_))) | None => break,
+                        Some(Ok(Message::Close(frame))) => {
+                            if let Some(frame) = frame {
+                                let code = u16::from(frame.code);
+                                let reason = frame.reason.to_string();
+                                if requires_new_session_close_code(code) {
+                                    let mut session = self.gateway_session.lock();
+                                    session.session_id = None;
+                                    session.resume_gateway_url = None;
+                                    session.sequence = None;
+                                }
+                                if is_fatal_gateway_close_code(code) {
+                                    anyhow::bail!("discord gateway closed with fatal code {code}: {reason}");
+                                }
+                                tracing::warn!(code, %reason, had_ready, sequence, "discord gateway closed; reconnecting");
+                            }
+                            break;
+                        }
+                        None => {
+                            tracing::warn!(had_ready, sequence, "discord gateway stream ended; reconnecting");
+                            break;
+                        }
                         _ => continue,
                     };
 
@@ -320,9 +371,39 @@ impl Channel for DiscordChannel {
                     // Track sequence number from all dispatch events
                     if let Some(s) = event.get("s").and_then(serde_json::Value::as_i64) {
                         sequence = s;
+                        self.gateway_session.lock().sequence = Some(s);
                     }
 
                     let op = event.get("op").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                    let event_type = event.get("t").and_then(|t| t.as_str()).unwrap_or("");
+
+                    match event_type {
+                        "READY" => {
+                            had_ready = true;
+                            let session_id = event.get("d")
+                                .and_then(|d| d.get("session_id"))
+                                .and_then(serde_json::Value::as_str)
+                                .map(ToString::to_string);
+                            let resume_url = event.get("d")
+                                .and_then(|d| d.get("resume_gateway_url"))
+                                .and_then(serde_json::Value::as_str)
+                                .map(ToString::to_string);
+                            {
+                                let mut session = self.gateway_session.lock();
+                                session.session_id = session_id;
+                                session.resume_gateway_url = resume_url;
+                                session.sequence = if sequence >= 0 { Some(sequence) } else { None };
+                            }
+                            tracing::info!(sequence, "Discord: READY received");
+                            continue;
+                        }
+                        "RESUMED" => {
+                            had_ready = true;
+                            tracing::info!(sequence, "Discord: RESUMED received");
+                            continue;
+                        }
+                        _ => {}
+                    }
 
                     match op {
                         // Op 1: Server requests an immediate heartbeat
@@ -336,19 +417,24 @@ impl Channel for DiscordChannel {
                         }
                         // Op 7: Reconnect
                         7 => {
-                            tracing::warn!("Discord: received Reconnect (op 7), closing for restart");
+                            tracing::warn!(had_ready, sequence, "Discord: received Reconnect (op 7), closing for restart");
                             break;
                         }
                         // Op 9: Invalid Session
                         9 => {
-                            tracing::warn!("Discord: received Invalid Session (op 9), closing for restart");
+                            let resumable = event.get("d").and_then(serde_json::Value::as_bool).unwrap_or(false);
+                            if !resumable {
+                                let mut session = self.gateway_session.lock();
+                                session.session_id = None;
+                                session.resume_gateway_url = None;
+                                session.sequence = None;
+                            }
+                            tracing::warn!(resumable, had_ready, sequence, "Discord: received Invalid Session (op 9), closing for restart");
                             break;
                         }
                         _ => {}
                     }
 
-                    // Only handle MESSAGE_CREATE (opcode 0, type "MESSAGE_CREATE")
-                    let event_type = event.get("t").and_then(|t| t.as_str()).unwrap_or("");
                     if event_type != "MESSAGE_CREATE" {
                         continue;
                     }
@@ -469,9 +555,36 @@ impl Channel for DiscordChannel {
     }
 }
 
+fn is_fatal_gateway_close_code(code: u16) -> bool {
+    matches!(code, 4004 | 4010 | 4011 | 4012 | 4013 | 4014)
+}
+
+fn requires_new_session_close_code(code: u16) -> bool {
+    matches!(code, 4007 | 4009)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fatal_gateway_close_codes_match_expected() {
+        for code in [4004_u16, 4010, 4011, 4012, 4013, 4014] {
+            assert!(
+                is_fatal_gateway_close_code(code),
+                "code {code} should be fatal"
+            );
+        }
+        assert!(!is_fatal_gateway_close_code(4007));
+        assert!(!is_fatal_gateway_close_code(4009));
+    }
+
+    #[test]
+    fn new_session_close_codes_match_expected() {
+        assert!(requires_new_session_close_code(4007));
+        assert!(requires_new_session_close_code(4009));
+        assert!(!requires_new_session_close_code(4004));
+    }
 
     #[test]
     fn discord_channel_name() {

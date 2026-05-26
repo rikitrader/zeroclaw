@@ -216,42 +216,11 @@ impl Memory for MarkdownMemory {
         Ok(false)
     }
 
-    async fn clear(&self, category: Option<&MemoryCategory>) -> anyhow::Result<usize> {
-        let entries_before = self.read_all_entries().await?.len();
-
-        match category {
-            Some(MemoryCategory::Core) => {
-                let path = self.core_path();
-                if path.exists() {
-                    fs::remove_file(&path).await?;
-                }
-            }
-            Some(MemoryCategory::Daily | MemoryCategory::Conversation) => {
-                let dir = self.memory_dir();
-                if dir.exists() {
-                    fs::remove_dir_all(&dir).await?;
-                    fs::create_dir_all(&dir).await?;
-                }
-            }
-            Some(MemoryCategory::Custom(_)) => {
-                // Custom categories in markdown land in daily files;
-                // clearing them individually is not supported.
-            }
-            None => {
-                let core = self.core_path();
-                if core.exists() {
-                    fs::remove_file(&core).await?;
-                }
-                let dir = self.memory_dir();
-                if dir.exists() {
-                    fs::remove_dir_all(&dir).await?;
-                    fs::create_dir_all(&dir).await?;
-                }
-            }
-        }
-
-        let entries_after = self.read_all_entries().await?.len();
-        Ok(entries_before.saturating_sub(entries_after))
+    async fn clear(&self, _category: Option<&MemoryCategory>) -> anyhow::Result<usize> {
+        anyhow::bail!(
+            "memory clear is unsupported for append-only backend 'markdown'; \
+             switch to a deletable backend (sqlite, lucid, or postgres)"
+        );
     }
 
     async fn count(&self) -> anyhow::Result<usize> {

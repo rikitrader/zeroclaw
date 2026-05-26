@@ -55,6 +55,11 @@ impl Sandbox for BubblewrapSandbox {
             "--unshare-all",
             "--die-with-parent",
         ]);
+        for lib_dir in &["/lib64", "/lib"] {
+            if std::path::Path::new(lib_dir).exists() {
+                bwrap_cmd.args(["--ro-bind", lib_dir, lib_dir]);
+            }
+        }
         bwrap_cmd.arg(&program);
         bwrap_cmd.args(&args);
 
@@ -127,6 +132,31 @@ mod tests {
             !args.contains(&"--share-net".to_string()),
             "must NOT include --share-net (network should be blocked)"
         );
+    }
+
+    #[test]
+    fn bubblewrap_wrap_command_conditionally_binds_lib_dirs() {
+        let sandbox = BubblewrapSandbox;
+        let mut cmd = Command::new("echo");
+        sandbox.wrap_command(&mut cmd).unwrap();
+
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+
+        for lib_dir in &["/lib64", "/lib"] {
+            if std::path::Path::new(lib_dir).exists() {
+                let has_ro_bind_triplet = args
+                    .windows(3)
+                    .any(|w| w[0] == "--ro-bind" && w[1] == *lib_dir && w[2] == *lib_dir);
+                assert!(
+                    has_ro_bind_triplet,
+                    "{lib_dir} exists on host but --ro-bind {lib_dir} {lib_dir} \
+                     is missing from bwrap args"
+                );
+            }
+        }
     }
 
     #[test]
