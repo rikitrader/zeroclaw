@@ -143,7 +143,8 @@ mod tests {
     fn tool_metadata() {
         let tmp = tempfile::TempDir::new().unwrap();
         let store = test_store_with_wallet(&tmp);
-        let provider = Arc::new(EvmProvider::connect("https://rpc.sepolia.org", 11_155_111).unwrap());
+        let provider =
+            Arc::new(EvmProvider::connect("https://rpc.sepolia.org", 11_155_111).unwrap());
         let tool = WalletTokenBalanceTool::new(store, provider);
         assert_eq!(tool.name(), "wallet_token_balance");
         assert!(!tool.description().is_empty());
@@ -155,7 +156,8 @@ mod tests {
     async fn missing_token_address_rejection() {
         let tmp = tempfile::TempDir::new().unwrap();
         let store = test_store_with_wallet(&tmp);
-        let provider = Arc::new(EvmProvider::connect("https://rpc.sepolia.org", 11_155_111).unwrap());
+        let provider =
+            Arc::new(EvmProvider::connect("https://rpc.sepolia.org", 11_155_111).unwrap());
         let tool = WalletTokenBalanceTool::new(store, provider);
         let result = tool.execute(json!({})).await;
         assert!(result.is_err());

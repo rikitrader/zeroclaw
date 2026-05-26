@@ -912,6 +912,7 @@ pub(crate) async fn agent_turn(
         cosmic_free_energy: None,
         cosmic_world_model: None,
         cosmic_thalamus: None,
+        conscience: None,
     })
     .await
 }
@@ -939,6 +940,9 @@ pub(crate) struct LoopContext<'a> {
     pub cosmic_free_energy: Option<&'a Mutex<FreeEnergyState>>,
     pub cosmic_world_model: Option<&'a Mutex<WorldModel>>,
     pub cosmic_thalamus: Option<&'a Mutex<SensoryThalamus>>,
+    /// PR-2 conscience gate: when present and `gate_enabled`, every
+    /// tool call is run through `evaluate_tool_call` before dispatch.
+    pub conscience: Option<&'a crate::config::schema::ConscienceConfig>,
 }
 
 pub(crate) async fn run_tool_call_loop(ctx: LoopContext<'_>) -> Result<String> {
@@ -964,6 +968,7 @@ pub(crate) async fn run_tool_call_loop(ctx: LoopContext<'_>) -> Result<String> {
         cosmic_free_energy,
         cosmic_world_model,
         cosmic_thalamus,
+        conscience,
     } = ctx;
     let max_iterations = if max_tool_iterations == 0 {
         DEFAULT_MAX_TOOL_ITERATIONS
@@ -1277,6 +1282,47 @@ pub(crate) async fn run_tool_call_loop(ctx: LoopContext<'_>) -> Result<String> {
                 }
             });
 
+            // PR-2: Conscience gate — pre-action ethical/normative check.
+            // Runs only when `[bot.conscience] gate_enabled = true`. Any
+            // verdict other than Allow blocks the tool call. Norms are
+            // empty for now; future PRs will source them from config /
+            // soul constitution / cosmic_bridge SelfState.
+            let blocked_by_conscience = conscience.filter(|cfg| cfg.gate_enabled).and_then(|cfg| {
+                use crate::conscience::{evaluate_tool_call, GateVerdict, SelfState, Thresholds};
+                let thresholds = Thresholds {
+                    allow_above: cfg.allow_threshold,
+                    ask_above: cfg.ask_threshold,
+                    block_below: cfg.block_threshold,
+                };
+                // SelfState defaults to neutral integrity; cosmic
+                // modulation will be threaded in a follow-up PR.
+                let self_state = SelfState {
+                    integrity_score: 1.0,
+                    recent_violations: 0,
+                    active_repairs: 0,
+                    arousal: None,
+                    confidence: None,
+                    risk_level: None,
+                    free_energy: None,
+                };
+                let (verdict, score) =
+                    evaluate_tool_call(&call.name, &thresholds, &self_state, &[], None, None);
+                if verdict == GateVerdict::Allow {
+                    None
+                } else {
+                    tracing::warn!(
+                        tool = %call.name,
+                        ?verdict,
+                        score,
+                        "Conscience gate blocked tool execution"
+                    );
+                    Some(format!(
+                        "Tool '{}' blocked by conscience gate: verdict={:?}, score={:.3}",
+                        call.name, verdict, score
+                    ))
+                }
+            });
+
             observer.record_event(&ObserverEvent::ToolCallStart {
                 tool: call.name.clone(),
             });
@@ -1286,7 +1332,7 @@ pub(crate) async fn run_tool_call_loop(ctx: LoopContext<'_>) -> Result<String> {
                 fe.predict(&tool_domain, 0.8, 0.7)
             });
             let start = Instant::now();
-            let result = if let Some(blocked_msg) = blocked_by_gate {
+            let result = if let Some(blocked_msg) = blocked_by_gate.or(blocked_by_conscience) {
                 observer.record_event(&ObserverEvent::ToolCall {
                     tool: call.name.clone(),
                     duration: start.elapsed(),
@@ -2198,6 +2244,7 @@ pub async fn run(
             cosmic_free_energy: cosmic_fe,
             cosmic_world_model: cosmic_wm,
             cosmic_thalamus: cosmic_thal,
+            conscience: Some(&config.conscience),
         })
         .await?;
         final_output = response.clone();
@@ -2555,6 +2602,7 @@ pub async fn run(
                 cosmic_free_energy: cosmic_fe,
                 cosmic_world_model: cosmic_wm,
                 cosmic_thalamus: cosmic_thal,
+                conscience: Some(&config.conscience),
             })
             .await
             {

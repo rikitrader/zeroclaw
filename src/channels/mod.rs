@@ -736,6 +736,7 @@ async fn process_channel_message(ctx: Arc<ChannelRuntimeContext>, msg: traits::C
             cosmic_free_energy: ctx.cosmic_free_energy.as_ref(),
             cosmic_world_model: ctx.cosmic_world_model.as_ref(),
             cosmic_thalamus: ctx.cosmic_thalamus.as_ref(),
+            conscience: None,
         }),
     )
     .await;

@@ -57,19 +57,19 @@ mod continuity {
 mod cosmic {
     pub use zeroclaw::cosmic::*;
 }
-mod cost {
-    pub use zeroclaw::cost::*;
-}
+mod cost;
 mod skillforge {
     pub use zeroclaw::skillforge::*;
 }
 mod cognitive {
     pub use zeroclaw::cognitive::*;
 }
+mod conscience;
 mod cron;
 mod daemon;
 mod doctor;
 mod gateway;
+mod goals;
 mod hardware;
 mod health;
 mod heartbeat;

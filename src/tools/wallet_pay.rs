@@ -34,7 +34,12 @@ impl WalletPayTool {
             .cost_tracker
             .as_ref()
             .and_then(|ct| ct.get_summary().ok())
-            .map(|s| (f64_to_cents(s.daily_cost_usd), f64_to_cents(s.monthly_cost_usd)))
+            .map(|s| {
+                (
+                    f64_to_cents(s.daily_cost_usd),
+                    f64_to_cents(s.monthly_cost_usd),
+                )
+            })
             .unwrap_or((0, 0));
 
         TreasuryLimits {
@@ -118,7 +123,11 @@ fn f64_to_cents(usd: f64) -> u64 {
         return 0;
     }
     let cents = (usd * 100.0).round();
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
     if cents >= u64::MAX as f64 {
         u64::MAX
     } else {

@@ -13,7 +13,7 @@ pub enum GoalStatus {
 }
 
 impl GoalStatus {
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Proposed => "proposed",
             Self::Approved => "approved",
@@ -64,6 +64,29 @@ impl GoalSource {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VerificationMethod {
+    /// Trust the agent's response. Used when no concrete check is feasible.
+    /// Backward-compatible default for goals without explicit verification.
+    #[default]
+    AgentSelfReport,
+    /// Run a shell command. Success = expected exit status (zero by default).
+    Command {
+        cmd: String,
+        #[serde(default = "default_expect_exit_zero")]
+        expect_exit_zero: bool,
+    },
+    /// Health subsystem component must be in `ok` state after the agent finishes.
+    HealthOk { component: String },
+    /// Never auto-complete. Always revert to `approved` so a human verifies manually.
+    Manual,
+}
+
+fn default_expect_exit_zero() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Goal {
     pub id: String,
@@ -76,6 +99,13 @@ pub struct Goal {
     pub approved_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub evidence: Option<String>,
+    /// Atomic Ideal-State Criteria. All must be satisfied for completion.
+    /// Empty vec is allowed and falls back to `verification_method`.
+    #[serde(default)]
+    pub success_criteria: Vec<String>,
+    /// How the autonomy loop verifies that this goal is satisfied.
+    #[serde(default)]
+    pub verification_method: VerificationMethod,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

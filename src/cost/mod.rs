@@ -2,7 +2,7 @@ pub mod tracker;
 pub mod types;
 
 pub use tracker::CostTracker;
-pub use types::{BudgetCheck, CostRecord, CostSummary, ModelStats, TokenUsage, UsagePeriod};
+pub use types::{BudgetCheck, TokenUsage};
 
 pub fn create_tracker_from_json(
     cost_config_json: &serde_json::Value,

@@ -182,6 +182,9 @@ pub struct Config {
     #[serde(default)]
     pub life: LifeConfig,
 
+    #[serde(default)]
+    pub conscience: ConscienceConfig,
+
     #[serde(default = "default_bot_max_memory_mb")]
     pub max_memory_mb: u64,
     #[serde(default = "default_bot_max_concurrent_requests")]
@@ -1989,6 +1992,7 @@ impl Default for ObservabilityConfig {
 
 // ── Autonomy / Security ──────────────────────────────────────────
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutonomyConfig {
     pub level: AutonomyLevel,
@@ -2013,6 +2017,31 @@ pub struct AutonomyConfig {
     /// Tools that always require interactive approval, even after "Always".
     #[serde(default = "default_always_ask")]
     pub always_ask: Vec<String>,
+
+    /// Enable the goal-driven autonomy loop (polls approved goals and dispatches them).
+    #[serde(default)]
+    pub loop_enabled: bool,
+
+    /// How often the autonomy loop polls for approved goals (seconds).
+    #[serde(default = "default_autonomy_loop_poll_secs")]
+    pub loop_poll_secs: u64,
+
+    /// Maximum wall-clock seconds a single autonomous goal dispatch may run before
+    /// the autonomy loop times out and reverts the goal to `approved`.
+    #[serde(default = "default_goal_timeout_secs")]
+    pub goal_timeout_secs: u64,
+
+    /// Enable drift-driven goal proposal (auto-propose goals when health components churn).
+    #[serde(default)]
+    pub self_trigger_enabled: bool,
+
+    /// How often the autonomy loop checks for drift (seconds).
+    #[serde(default = "default_self_trigger_interval_secs")]
+    pub self_trigger_check_interval_secs: u64,
+
+    /// Minimum component restart count required to trigger a recurring-failure goal.
+    #[serde(default = "default_self_trigger_restart_threshold")]
+    pub self_trigger_restart_threshold: u32,
 }
 
 fn default_auto_approve() -> Vec<String> {
@@ -2021,6 +2050,22 @@ fn default_auto_approve() -> Vec<String> {
 
 fn default_always_ask() -> Vec<String> {
     vec![]
+}
+
+fn default_autonomy_loop_poll_secs() -> u64 {
+    60
+}
+
+fn default_goal_timeout_secs() -> u64 {
+    600
+}
+
+fn default_self_trigger_interval_secs() -> u64 {
+    300
+}
+
+fn default_self_trigger_restart_threshold() -> u32 {
+    5
 }
 
 impl Default for AutonomyConfig {
@@ -2068,6 +2113,12 @@ impl Default for AutonomyConfig {
             block_high_risk_commands: true,
             auto_approve: default_auto_approve(),
             always_ask: default_always_ask(),
+            loop_enabled: false,
+            loop_poll_secs: default_autonomy_loop_poll_secs(),
+            goal_timeout_secs: default_goal_timeout_secs(),
+            self_trigger_enabled: false,
+            self_trigger_check_interval_secs: default_self_trigger_interval_secs(),
+            self_trigger_restart_threshold: default_self_trigger_restart_threshold(),
         }
     }
 }
@@ -2243,6 +2294,13 @@ pub struct ReliabilityConfig {
     /// Max retries for cron job execution attempts.
     #[serde(default = "default_scheduler_retries")]
     pub scheduler_retries: u32,
+    /// Max restarts allowed for a single supervised daemon component within
+    /// `component_restart_budget_window_secs` before the supervisor stops trying.
+    #[serde(default = "default_restart_budget")]
+    pub component_restart_budget: u32,
+    /// Sliding window (seconds) for `component_restart_budget`.
+    #[serde(default = "default_restart_budget_window_secs")]
+    pub component_restart_budget_window_secs: u64,
 }
 
 fn default_provider_retries() -> u32 {
@@ -2269,6 +2327,14 @@ fn default_scheduler_retries() -> u32 {
     2
 }
 
+fn default_restart_budget() -> u32 {
+    10
+}
+
+fn default_restart_budget_window_secs() -> u64 {
+    300
+}
+
 impl Default for ReliabilityConfig {
     fn default() -> Self {
         Self {
@@ -2281,6 +2347,8 @@ impl Default for ReliabilityConfig {
             channel_max_backoff_secs: default_channel_backoff_max_secs(),
             scheduler_poll_secs: default_scheduler_poll_secs(),
             scheduler_retries: default_scheduler_retries(),
+            component_restart_budget: default_restart_budget(),
+            component_restart_budget_window_secs: default_restart_budget_window_secs(),
         }
     }
 }
@@ -3147,6 +3215,36 @@ impl Default for LifeConfig {
     }
 }
 
+// ── Conscience Config ───────────────────────────────────────────
+
+/// Pre-action ethical/normative gate (PR-2 wiring).
+///
+/// When `gate_enabled = true`, every LLM-issued tool call is run
+/// through `crate::conscience::evaluate_tool_call` before dispatch.
+/// Any verdict other than `Allow` blocks execution and surfaces a
+/// gate-specific error to the model. Default is OFF — gate is opt-in
+/// for one release, then default-on after a soak window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConscienceConfig {
+    pub gate_enabled: bool,
+    pub allow_threshold: f64,
+    pub ask_threshold: f64,
+    pub block_threshold: f64,
+}
+
+impl Default for ConscienceConfig {
+    fn default() -> Self {
+        // Mirrors crate::conscience::types::Thresholds::default().
+        Self {
+            gate_enabled: false,
+            allow_threshold: 0.80,
+            ask_threshold: 0.55,
+            block_threshold: 0.45,
+        }
+    }
+}
+
 // ── NVIDIA ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -3211,6 +3309,7 @@ impl Default for Config {
             consciousness: ConsciousnessConfig::default(),
             cognitive: CognitiveConfig::default(),
             life: LifeConfig::default(),
+            conscience: ConscienceConfig::default(),
             query_classification: QueryClassificationConfig::default(),
             max_memory_mb: default_bot_max_memory_mb(),
             max_concurrent_requests: default_bot_max_concurrent_requests(),
@@ -4062,6 +4161,12 @@ default_temperature = 0.7
                 block_high_risk_commands: true,
                 auto_approve: vec!["file_read".into()],
                 always_ask: vec![],
+                loop_enabled: false,
+                loop_poll_secs: 60,
+                goal_timeout_secs: 600,
+                self_trigger_enabled: false,
+                self_trigger_check_interval_secs: 300,
+                self_trigger_restart_threshold: 5,
             },
             runtime: RuntimeConfig {
                 kind: "docker".into(),
@@ -4129,6 +4234,7 @@ default_temperature = 0.7
             cognitive: CognitiveConfig::default(),
             life: LifeConfig::default(),
             skillforge: SkillForgeConfig::default(),
+            conscience: ConscienceConfig::default(),
             max_memory_mb: 512,
             max_concurrent_requests: 10,
             max_tokens_per_minute: 100_000,
@@ -4285,6 +4391,7 @@ tool_dispatcher = "xml"
             cognitive: CognitiveConfig::default(),
             life: LifeConfig::default(),
             skillforge: SkillForgeConfig::default(),
+            conscience: ConscienceConfig::default(),
             max_memory_mb: 512,
             max_concurrent_requests: 10,
             max_tokens_per_minute: 100_000,

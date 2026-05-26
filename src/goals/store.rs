@@ -1,15 +1,21 @@
 use crate::config::Config;
-use crate::goals::{Goal, GoalSource, GoalStatus};
+use crate::goals::{Goal, GoalSource, GoalStatus, VerificationMethod};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 
+const COLUMN_LIST: &str = "id, title, description, source, status, priority, proposed_at, approved_at, completed_at, evidence, success_criteria, verification_method";
+
 pub fn propose(config: &Config, goal: &Goal) -> Result<Goal> {
+    let criteria_json = serde_json::to_string(&goal.success_criteria)
+        .context("Failed to serialize success_criteria")?;
+    let verification_json = serde_json::to_string(&goal.verification_method)
+        .context("Failed to serialize verification_method")?;
     with_connection(config, |conn| {
         conn.execute(
-            "INSERT INTO goals (id, title, description, source, status, priority, proposed_at, approved_at, completed_at, evidence)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO goals (id, title, description, source, status, priority, proposed_at, approved_at, completed_at, evidence, success_criteria, verification_method)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 goal.id,
                 goal.title,
@@ -21,6 +27,8 @@ pub fn propose(config: &Config, goal: &Goal) -> Result<Goal> {
                 goal.approved_at.map(|d| d.to_rfc3339()),
                 goal.completed_at.map(|d| d.to_rfc3339()),
                 goal.evidence,
+                criteria_json,
+                verification_json,
             ],
         )
         .context("Failed to propose goal")?;
@@ -36,7 +44,7 @@ pub fn list(config: &Config, status_filter: Option<GoalStatus>) -> Result<Vec<Go
         match status_filter {
             Some(s) => {
                 let mut stmt = conn.prepare(
-                    "SELECT id, title, description, source, status, priority, proposed_at, approved_at, completed_at, evidence
+                    "SELECT id, title, description, source, status, priority, proposed_at, approved_at, completed_at, evidence, success_criteria, verification_method
                      FROM goals WHERE status = ?1 ORDER BY priority DESC, proposed_at ASC",
                 )?;
                 let rows = stmt.query_map(params![s.as_str()], map_goal_row)?;
@@ -46,7 +54,7 @@ pub fn list(config: &Config, status_filter: Option<GoalStatus>) -> Result<Vec<Go
             }
             None => {
                 let mut stmt = conn.prepare(
-                    "SELECT id, title, description, source, status, priority, proposed_at, approved_at, completed_at, evidence
+                    "SELECT id, title, description, source, status, priority, proposed_at, approved_at, completed_at, evidence, success_criteria, verification_method
                      FROM goals ORDER BY priority DESC, proposed_at ASC",
                 )?;
                 let rows = stmt.query_map([], map_goal_row)?;
@@ -63,7 +71,7 @@ pub fn list(config: &Config, status_filter: Option<GoalStatus>) -> Result<Vec<Go
 pub fn get(config: &Config, id: &str) -> Result<Goal> {
     with_connection(config, |conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, title, description, source, status, priority, proposed_at, approved_at, completed_at, evidence
+            "SELECT id, title, description, source, status, priority, proposed_at, approved_at, completed_at, evidence, success_criteria, verification_method
              FROM goals WHERE id = ?1",
         )?;
         let mut rows = stmt.query(params![id])?;
@@ -86,6 +94,38 @@ pub fn approve(config: &Config, id: &str) -> Result<Goal> {
             .context("Failed to approve goal")?;
         if changed == 0 {
             anyhow::bail!("Goal '{id}' not found");
+        }
+        Ok(())
+    })?;
+    get(config, id)
+}
+
+pub fn set_in_progress(config: &Config, id: &str) -> Result<Goal> {
+    with_connection(config, |conn| {
+        let changed = conn
+            .execute(
+                "UPDATE goals SET status = 'in_progress' WHERE id = ?1 AND status IN ('approved', 'in_progress')",
+                params![id],
+            )
+            .context("Failed to transition goal to in_progress")?;
+        if changed == 0 {
+            anyhow::bail!("Goal '{id}' not found or not in an approvable state");
+        }
+        Ok(())
+    })?;
+    get(config, id)
+}
+
+pub fn revert_to_approved(config: &Config, id: &str, reason: &str) -> Result<Goal> {
+    with_connection(config, |conn| {
+        let changed = conn
+            .execute(
+                "UPDATE goals SET status = 'approved', evidence = ?1 WHERE id = ?2 AND status = 'in_progress'",
+                params![reason, id],
+            )
+            .context("Failed to revert goal to approved")?;
+        if changed == 0 {
+            anyhow::bail!("Goal '{id}' not found or not in_progress");
         }
         Ok(())
     })?;
@@ -188,6 +228,17 @@ fn map_goal_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Goal> {
     let proposed_at_raw: String = row.get(6)?;
     let approved_at_raw: Option<String> = row.get(7)?;
     let completed_at_raw: Option<String> = row.get(8)?;
+    let criteria_raw: Option<String> = row.get(10).ok().flatten();
+    let verification_raw: Option<String> = row.get(11).ok().flatten();
+
+    let success_criteria = criteria_raw
+        .as_deref()
+        .map(|s| serde_json::from_str::<Vec<String>>(s).unwrap_or_default())
+        .unwrap_or_default();
+    let verification_method = verification_raw
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<VerificationMethod>(s).ok())
+        .unwrap_or_default();
 
     Ok(Goal {
         id: row.get(0)?,
@@ -206,6 +257,8 @@ fn map_goal_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Goal> {
             None => None,
         },
         evidence: row.get(9)?,
+        success_criteria,
+        verification_method,
     })
 }
 
@@ -222,21 +275,37 @@ fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>)
     conn.execute_batch(
         "PRAGMA foreign_keys = ON;
          CREATE TABLE IF NOT EXISTS goals (
-            id           TEXT PRIMARY KEY,
-            title        TEXT NOT NULL,
-            description  TEXT NOT NULL,
-            source       TEXT NOT NULL DEFAULT 'telos',
-            status       TEXT NOT NULL DEFAULT 'proposed',
-            priority     INTEGER NOT NULL DEFAULT 5,
-            proposed_at  TEXT NOT NULL,
-            approved_at  TEXT,
-            completed_at TEXT,
-            evidence     TEXT
+            id                  TEXT PRIMARY KEY,
+            title               TEXT NOT NULL,
+            description         TEXT NOT NULL,
+            source              TEXT NOT NULL DEFAULT 'telos',
+            status              TEXT NOT NULL DEFAULT 'proposed',
+            priority            INTEGER NOT NULL DEFAULT 5,
+            proposed_at         TEXT NOT NULL,
+            approved_at         TEXT,
+            completed_at        TEXT,
+            evidence            TEXT,
+            success_criteria    TEXT,
+            verification_method TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status);
         CREATE INDEX IF NOT EXISTS idx_goals_priority ON goals(priority);",
     )
     .context("Failed to initialize goals schema")?;
+
+    // Idempotent migrations for tables created before the verification columns existed.
+    // SQLite raises an error if the column already exists; we swallow that case only.
+    for stmt in [
+        "ALTER TABLE goals ADD COLUMN success_criteria TEXT",
+        "ALTER TABLE goals ADD COLUMN verification_method TEXT",
+    ] {
+        if let Err(e) = conn.execute(stmt, []) {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                return Err(anyhow::anyhow!(e)).context("Failed to migrate goals schema");
+            }
+        }
+    }
 
     f(&conn)
 }
@@ -271,6 +340,8 @@ mod tests {
             approved_at: None,
             completed_at: None,
             evidence: None,
+            success_criteria: Vec::new(),
+            verification_method: VerificationMethod::default(),
         }
     }
 

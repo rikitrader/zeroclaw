@@ -1672,6 +1672,8 @@ mod tests {
             channel_max_backoff_secs: 60,
             scheduler_poll_secs: 15,
             scheduler_retries: 2,
+            component_restart_budget: 10,
+            component_restart_budget_window_secs: 300,
         };
 
         let provider = create_resilient_provider(

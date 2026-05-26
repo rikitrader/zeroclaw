@@ -17,12 +17,16 @@ pub mod gate;
 pub mod ledger;
 pub mod types;
 
+#[allow(unused_imports)]
 pub use cosmic_bridge::self_state_from_cosmic;
+#[allow(unused_imports)]
 pub use gate::{
     compute_conscience_score, conscience_audit, conscience_gate, evaluate_tool_call, AuditResult,
     GateVerdict,
 };
+#[allow(unused_imports)]
 pub use ledger::IntegrityLedger;
+#[allow(unused_imports)]
 pub use types::{
     ActionContext, Impact, Intent, Norm, NormAction, NormConfig, ProposedAction, RepairPlan,
     SelfState, Thresholds, Value, ValueType, VerdictRecord,
