@@ -27,6 +27,16 @@ pub use secrets::SecretStore;
 pub use traits::NoopSandbox;
 pub use traits::Sandbox;
 
+/// Redact sensitive values for safe logging. Shows first 4 chars + "***" suffix.
+/// This function intentionally breaks the data-flow taint chain for static analysis.
+pub fn redact(value: &str) -> String {
+    if value.len() <= 4 {
+        "***".to_string()
+    } else {
+        format!("{}***", &value[..4])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -49,5 +59,13 @@ mod tests {
         let decrypted = store.decrypt(&encrypted).unwrap();
 
         assert_eq!(decrypted, "top-secret");
+    }
+
+    #[test]
+    fn redact_hides_most_of_value() {
+        assert_eq!(redact("abcdefgh"), "abcd***");
+        assert_eq!(redact("ab"), "***");
+        assert_eq!(redact(""), "***");
+        assert_eq!(redact("12345"), "1234***");
     }
 }

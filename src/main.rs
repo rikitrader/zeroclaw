@@ -1177,12 +1177,11 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                         let account_id =
                             extract_openai_account_id_for_profile(&token_set.access_token);
 
-                        let saved = auth_service
-                            .store_openai_tokens(&profile, token_set, account_id, true)?;
+                        auth_service.store_openai_tokens(&profile, token_set, account_id, true)?;
                         clear_pending_openai_login(config);
 
-                        println!("Saved profile {}", saved.id);
-                        println!("Active profile for openai-codex: {}", saved.id);
+                        println!("Saved profile {profile}");
+                        println!("Active profile for openai-codex: {profile}");
                         return Ok(());
                     }
                     Err(e) => {
@@ -1249,11 +1248,11 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                     .await?;
             let account_id = extract_openai_account_id_for_profile(&token_set.access_token);
 
-            let saved = auth_service.store_openai_tokens(&profile, token_set, account_id, true)?;
+            auth_service.store_openai_tokens(&profile, token_set, account_id, true)?;
             clear_pending_openai_login(config);
 
-            println!("Saved profile {}", saved.id);
-            println!("Active profile for openai-codex: {}", saved.id);
+            println!("Saved profile {profile}");
+            println!("Active profile for openai-codex: {profile}");
             Ok(())
         }
 
@@ -1307,11 +1306,11 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
             .await?;
             let account_id = extract_openai_account_id_for_profile(&token_set.access_token);
 
-            let saved = auth_service.store_openai_tokens(&profile, token_set, account_id, true)?;
+            auth_service.store_openai_tokens(&profile, token_set, account_id, true)?;
             clear_pending_openai_login(config);
 
-            println!("Saved profile {}", saved.id);
-            println!("Active profile for openai-codex: {}", saved.id);
+            println!("Saved profile {profile}");
+            println!("Active profile for openai-codex: {profile}");
             Ok(())
         }
 
@@ -1337,10 +1336,9 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                 kind.as_metadata_value().to_string(),
             );
 
-            let saved =
-                auth_service.store_provider_token(&provider, &profile, &token, metadata, true)?;
-            println!("Saved profile {}", saved.id);
-            println!("Active profile for {provider}: {}", saved.id);
+            auth_service.store_provider_token(&provider, &profile, &token, metadata, true)?;
+            println!("Saved profile {profile}");
+            println!("Active profile for {provider}: {profile}");
             Ok(())
         }
 
@@ -1358,10 +1356,9 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                 kind.as_metadata_value().to_string(),
             );
 
-            let saved =
-                auth_service.store_provider_token(&provider, &profile, &token, metadata, true)?;
-            println!("Saved profile {}", saved.id);
-            println!("Active profile for {provider}: {}", saved.id);
+            auth_service.store_provider_token(&provider, &profile, &token, metadata, true)?;
+            println!("Saved profile {profile}");
+            println!("Active profile for {provider}: {profile}");
             Ok(())
         }
 
@@ -1400,8 +1397,8 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
 
         AuthCommands::Use { provider, profile } => {
             let provider = auth::normalize_provider(&provider)?;
-            let active = auth_service.set_active_profile(&provider, &profile)?;
-            println!("Active profile for {provider}: {active}");
+            auth_service.set_active_profile(&provider, &profile)?;
+            println!("Active profile for {provider}: {profile}");
             Ok(())
         }
 
@@ -1442,15 +1439,15 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                     marker,
                     id,
                     profile.kind,
-                    profile.account_id.as_deref().unwrap_or("unknown"),
+                    crate::security::redact(profile.account_id.as_deref().unwrap_or("unknown")),
                     format_expiry(profile)
                 );
             }
 
             println!();
             println!("Active profiles:");
-            for (provider, active) in &data.active_profiles {
-                println!("  {provider}: {active}");
+            for (provider, profile_id) in &data.active_profiles {
+                println!("  {provider}: {profile_id}");
             }
 
             Ok(())

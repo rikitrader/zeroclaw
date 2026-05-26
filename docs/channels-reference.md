@@ -359,6 +359,19 @@ use_feishu = false
 receive_mode = "websocket"
 ```
 
+Interactive onboarding support:
+
+```bash
+zeroclaw onboard --interactive
+```
+
+The wizard now includes a dedicated **Lark/Feishu** step with:
+
+- region selection (`Feishu (CN)` vs `Lark (International)`)
+- credential verification against official Open Platform auth endpoint
+- receive mode selection (`websocket` or `webhook`)
+- optional webhook verification token prompt (recommended for stronger callback authenticity checks)
+
 ### 4.12 DingTalk
 
 **Setup**: Register app at DingTalk Open Platform developer console. Chinese enterprise messaging.

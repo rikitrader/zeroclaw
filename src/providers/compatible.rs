@@ -27,6 +27,10 @@ pub struct OpenAiCompatibleProvider {
     /// GLM/Zhipu does not support the responses API.
     supports_responses_fallback: bool,
     user_agent: Option<String>,
+    /// When true, collect all `system` messages and prepend their content
+    /// to the first `user` message, then drop the system messages.
+    /// Required for providers that reject `role: system` (e.g. MiniMax).
+    merge_system_into_user: bool,
 }
 
 /// How the provider expects the API key to be sent.
@@ -47,7 +51,7 @@ impl OpenAiCompatibleProvider {
         credential: Option<&str>,
         auth_style: AuthStyle,
     ) -> Self {
-        Self::new_with_options(name, base_url, credential, auth_style, true, None)
+        Self::new_with_options(name, base_url, credential, auth_style, true, None, false)
     }
 
     /// Same as `new` but skips the /v1/responses fallback on 404.
@@ -58,7 +62,7 @@ impl OpenAiCompatibleProvider {
         credential: Option<&str>,
         auth_style: AuthStyle,
     ) -> Self {
-        Self::new_with_options(name, base_url, credential, auth_style, false, None)
+        Self::new_with_options(name, base_url, credential, auth_style, false, None, false)
     }
 
     /// Create a provider with a custom User-Agent header.
@@ -79,7 +83,19 @@ impl OpenAiCompatibleProvider {
             auth_style,
             true,
             Some(user_agent),
+            false,
         )
+    }
+
+    /// For providers that do not support `role: system` (e.g. MiniMax).
+    /// System prompt content is prepended to the first user message instead.
+    pub fn new_merge_system_into_user(
+        name: &str,
+        base_url: &str,
+        credential: Option<&str>,
+        auth_style: AuthStyle,
+    ) -> Self {
+        Self::new_with_options(name, base_url, credential, auth_style, false, None, true)
     }
 
     fn new_with_options(
@@ -89,6 +105,7 @@ impl OpenAiCompatibleProvider {
         auth_style: AuthStyle,
         supports_responses_fallback: bool,
         user_agent: Option<&str>,
+        merge_system_into_user: bool,
     ) -> Self {
         Self {
             name: name.to_string(),
@@ -97,7 +114,39 @@ impl OpenAiCompatibleProvider {
             auth_header: auth_style,
             supports_responses_fallback,
             user_agent: user_agent.map(ToString::to_string),
+            merge_system_into_user,
         }
+    }
+
+    /// Collect all `system` role messages, concatenate their content,
+    /// and prepend to the first `user` message. Drop all system messages.
+    /// Used for providers (e.g. MiniMax) that reject `role: system`.
+    fn flatten_system_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
+        let system_content: String = messages
+            .iter()
+            .filter(|m| m.role == "system")
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        if system_content.is_empty() {
+            return messages.to_vec();
+        }
+
+        let mut result: Vec<ChatMessage> = messages
+            .iter()
+            .filter(|m| m.role != "system")
+            .cloned()
+            .collect();
+
+        if let Some(first_user) = result.iter_mut().find(|m| m.role == "user") {
+            first_user.content = format!("{system_content}\n\n{}", first_user.content);
+        } else {
+            // No user message found: insert a synthetic user message with system content
+            result.insert(0, ChatMessage::user(&system_content));
+        }
+
+        result
     }
 
     fn http_client(&self) -> Client {
@@ -231,6 +280,30 @@ struct Choice {
     message: ResponseMessage,
 }
 
+/// Remove `<think>...</think>` blocks from model output.
+/// Some reasoning models (e.g. MiniMax) embed their chain-of-thought inline
+/// in the `content` field rather than a separate `reasoning_content` field.
+/// The resulting `<think>` tags must be stripped before returning to the user.
+fn strip_think_tags(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut rest = s;
+    loop {
+        if let Some(start) = rest.find("<think>") {
+            result.push_str(&rest[..start]);
+            if let Some(end) = rest[start..].find("</think>") {
+                rest = &rest[start + end + "</think>".len()..];
+            } else {
+                // Unclosed tag: drop the rest to avoid leaking partial reasoning.
+                break;
+            }
+        } else {
+            result.push_str(rest);
+            break;
+        }
+    }
+    result.trim().to_string()
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct ResponseMessage {
     #[serde(default)]
@@ -247,18 +320,22 @@ impl ResponseMessage {
     /// Extract text content, falling back to `reasoning_content` when `content`
     /// is missing or empty. Reasoning/thinking models (Qwen3, GLM-4, etc.)
     /// often return their output solely in `reasoning_content`.
+    /// Strips `<think>...</think>` blocks that some models (e.g. MiniMax) embed
+    /// inline in `content` instead of using a separate field.
     fn effective_content(&self) -> String {
-        match &self.content {
+        let raw = match &self.content {
             Some(c) if !c.is_empty() => c.clone(),
             _ => self.reasoning_content.clone().unwrap_or_default(),
-        }
+        };
+        strip_think_tags(&raw)
     }
 
     fn effective_content_optional(&self) -> Option<String> {
-        match &self.content {
+        let raw = match &self.content {
             Some(c) if !c.is_empty() => Some(c.clone()),
             _ => self.reasoning_content.clone().filter(|c| !c.is_empty()),
-        }
+        };
+        raw.map(|s| strip_think_tags(&s)).filter(|s| !s.is_empty())
     }
 }
 
@@ -860,17 +937,27 @@ impl InferenceProvider for OpenAiCompatibleProvider {
 
         let mut messages = Vec::new();
 
-        if let Some(sys) = system_prompt {
+        if self.merge_system_into_user {
+            let content = match system_prompt {
+                Some(sys) => format!("{sys}\n\n{message}"),
+                None => message.to_string(),
+            };
             messages.push(Message {
-                role: "system".to_string(),
-                content: sys.to_string(),
+                role: "user".to_string(),
+                content,
+            });
+        } else {
+            if let Some(sys) = system_prompt {
+                messages.push(Message {
+                    role: "system".to_string(),
+                    content: sys.to_string(),
+                });
+            }
+            messages.push(Message {
+                role: "user".to_string(),
+                content: message.to_string(),
             });
         }
-
-        messages.push(Message {
-            role: "user".to_string(),
-            content: message.to_string(),
-        });
 
         let request = ApiChatRequest {
             model: model.to_string(),
@@ -883,10 +970,29 @@ impl InferenceProvider for OpenAiCompatibleProvider {
 
         let url = self.chat_completions_url();
 
-        let response = self
+        let response = match self
             .apply_auth_header(self.http_client().post(&url).json(&request), credential)
             .send()
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(chat_error) => {
+                if self.supports_responses_fallback {
+                    let sanitized = super::sanitize_api_error(&chat_error.to_string());
+                    return self
+                        .chat_via_responses(credential, system_prompt, message, model)
+                        .await
+                        .map_err(|responses_err| {
+                            anyhow::anyhow!(
+                                "{} chat completions transport error: {sanitized} (responses fallback failed: {responses_err})",
+                                self.name
+                            )
+                        });
+                }
+
+                return Err(chat_error.into());
+            }
+        };
 
         if !response.status().is_success() {
             let status = response.status();
@@ -947,7 +1053,12 @@ impl InferenceProvider for OpenAiCompatibleProvider {
             )
         })?;
 
-        let api_messages: Vec<Message> = messages
+        let effective_messages = if self.merge_system_into_user {
+            Self::flatten_system_messages(messages)
+        } else {
+            messages.to_vec()
+        };
+        let api_messages: Vec<Message> = effective_messages
             .iter()
             .map(|m| Message {
                 role: m.role.clone(),
@@ -965,10 +1076,38 @@ impl InferenceProvider for OpenAiCompatibleProvider {
         };
 
         let url = self.chat_completions_url();
-        let response = self
+        let response = match self
             .apply_auth_header(self.http_client().post(&url).json(&request), credential)
             .send()
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(chat_error) => {
+                if self.supports_responses_fallback {
+                    let system = messages.iter().find(|m| m.role == "system");
+                    let last_user = messages.iter().rfind(|m| m.role == "user");
+                    if let Some(user_msg) = last_user {
+                        let sanitized = super::sanitize_api_error(&chat_error.to_string());
+                        return self
+                            .chat_via_responses(
+                                credential,
+                                system.map(|m| m.content.as_str()),
+                                &user_msg.content,
+                                model,
+                            )
+                            .await
+                            .map_err(|responses_err| {
+                                anyhow::anyhow!(
+                                    "{} chat completions transport error: {sanitized} (responses fallback failed: {responses_err})",
+                                    self.name
+                                )
+                            });
+                    }
+                }
+
+                return Err(chat_error.into());
+            }
+        };
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1059,7 +1198,12 @@ impl Provider for OpenAiCompatibleProvider {
             )
         })?;
 
-        let api_messages: Vec<Message> = messages
+        let effective_messages = if self.merge_system_into_user {
+            Self::flatten_system_messages(messages)
+        } else {
+            messages.to_vec()
+        };
+        let api_messages: Vec<Message> = effective_messages
             .iter()
             .map(|m| Message {
                 role: m.role.clone(),
@@ -1085,10 +1229,25 @@ impl Provider for OpenAiCompatibleProvider {
         };
 
         let url = self.chat_completions_url();
-        let response = self
+        let response = match self
             .apply_auth_header(self.http_client().post(&url).json(&request), credential)
             .send()
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(
+                    "{} native tool call transport failed: {error}; falling back to history path",
+                    self.name
+                );
+                let text = self.chat_with_history(messages, model, temperature).await?;
+                return Ok(ProviderChatResponse {
+                    text: Some(text),
+                    tool_calls: vec![],
+                    usage: None,
+                });
+            }
+        };
 
         if !response.status().is_success() {
             return Err(super::api_error(&self.name, response).await);
@@ -1143,9 +1302,14 @@ impl Provider for OpenAiCompatibleProvider {
         })?;
 
         let tools = Self::convert_tool_specs(request.tools);
+        let effective_messages = if self.merge_system_into_user {
+            Self::flatten_system_messages(request.messages)
+        } else {
+            request.messages.to_vec()
+        };
         let native_request = NativeChatRequest {
             model: model.to_string(),
-            messages: Self::convert_messages_for_native(request.messages),
+            messages: Self::convert_messages_for_native(&effective_messages),
             temperature,
             stream: Some(false),
             tool_choice: tools.as_ref().map(|_| "auto".to_string()),
@@ -1153,13 +1317,46 @@ impl Provider for OpenAiCompatibleProvider {
         };
 
         let url = self.chat_completions_url();
-        let response = self
+        let response = match self
             .apply_auth_header(
                 self.http_client().post(&url).json(&native_request),
                 credential,
             )
             .send()
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(chat_error) => {
+                if self.supports_responses_fallback {
+                    let system = request.messages.iter().find(|m| m.role == "system");
+                    let last_user = request.messages.iter().rfind(|m| m.role == "user");
+                    if let Some(user_msg) = last_user {
+                        let sanitized = super::sanitize_api_error(&chat_error.to_string());
+                        return self
+                            .chat_via_responses(
+                                credential,
+                                system.map(|m| m.content.as_str()),
+                                &user_msg.content,
+                                model,
+                            )
+                            .await
+                            .map(|text| ProviderChatResponse {
+                                text: Some(text),
+                                tool_calls: vec![],
+                                usage: None,
+                            })
+                            .map_err(|responses_err| {
+                                anyhow::anyhow!(
+                                    "{} native chat transport error: {sanitized} (responses fallback failed: {responses_err})",
+                                    self.name
+                                )
+                            });
+                    }
+                }
+
+                return Err(chat_error.into());
+            }
+        };
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1853,6 +2050,54 @@ mod tests {
         assert_eq!(converted[0].role, "tool");
         assert_eq!(converted[0].tool_call_id.as_deref(), Some("call_abc"));
         assert_eq!(converted[0].content.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn flatten_system_messages_merges_into_first_user() {
+        let input = vec![
+            ChatMessage::system("core policy"),
+            ChatMessage::assistant("ack"),
+            ChatMessage::system("delivery rules"),
+            ChatMessage::user("hello"),
+            ChatMessage::assistant("post-user"),
+        ];
+
+        let output = OpenAiCompatibleProvider::flatten_system_messages(&input);
+        assert_eq!(output.len(), 3);
+        assert_eq!(output[0].role, "assistant");
+        assert_eq!(output[0].content, "ack");
+        assert_eq!(output[1].role, "user");
+        assert_eq!(output[1].content, "core policy\n\ndelivery rules\n\nhello");
+        assert_eq!(output[2].role, "assistant");
+        assert_eq!(output[2].content, "post-user");
+        assert!(output.iter().all(|m| m.role != "system"));
+    }
+
+    #[test]
+    fn flatten_system_messages_inserts_user_when_missing() {
+        let input = vec![
+            ChatMessage::system("core policy"),
+            ChatMessage::assistant("ack"),
+        ];
+
+        let output = OpenAiCompatibleProvider::flatten_system_messages(&input);
+        assert_eq!(output.len(), 2);
+        assert_eq!(output[0].role, "user");
+        assert_eq!(output[0].content, "core policy");
+        assert_eq!(output[1].role, "assistant");
+        assert_eq!(output[1].content, "ack");
+    }
+
+    #[test]
+    fn strip_think_tags_removes_multiple_blocks() {
+        let input = "a<think>x</think>b<think>y</think>c";
+        assert_eq!(strip_think_tags(input), "abc");
+    }
+
+    #[test]
+    fn strip_think_tags_drops_unclosed_block_suffix() {
+        let input = "visible<think>hidden";
+        assert_eq!(strip_think_tags(input), "visible");
     }
 
     #[test]
