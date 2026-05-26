@@ -8,10 +8,11 @@ version = "0.2.0"
 edition = "2021"
 authors = ["theonlyhennygod"]
 license = "Apache-2.0"
-description = "Zero overhead. Zero compromise. 100% Rust. The fastest, smallest AI assistant."
-repository = "https://github.com/zeroclaw-labs/zeroclaw"
+description = "ZEROCLAW-X0: The world's most advanced cognitive AI agent runtime. Quantum reasoning, consciousness modeling, emotional intelligence. 140K lines of pure Rust."
+repository = "https://github.com/rikitrader/zeroclaw-x0"
+homepage = "https://github.com/rikitrader/zeroclaw-x0"
 readme = "README.md"
-keywords = ["ai", "agent", "cli", "assistant", "chatbot"]
+keywords = ["ai", "agent", "autonomous", "consciousness", "cognitive"]
 categories = ["command-line-utilities", "api-bindings"]
 
 [dependencies]

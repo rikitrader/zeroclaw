@@ -1,6 +1,6 @@
-# Contributing to ZeroClaw
+# Contributing to ZEROCLAW-X0
 
-Thanks for your interest in contributing to ZeroClaw! This guide will help you get started.
+Thanks for your interest in contributing to ZEROCLAW-X0! This guide will help you get started.
 
 ## Development Setup
 
