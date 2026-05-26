@@ -171,7 +171,10 @@ impl Observer for PrometheusObserver {
             | ObserverEvent::LlmRequest { .. }
             | ObserverEvent::LlmResponse { .. }
             | ObserverEvent::SurvivalTierChange { .. }
-            | ObserverEvent::ConsciousnessTick { .. } => {}
+            | ObserverEvent::ConsciousnessTick { .. }
+            | ObserverEvent::LifeTick { .. }
+            | ObserverEvent::LifeInitiative { .. }
+            | ObserverEvent::LifeDreamComplete { .. } => {}
             ObserverEvent::ToolCall {
                 tool,
                 duration,

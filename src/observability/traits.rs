@@ -67,6 +67,18 @@ pub enum ObserverEvent {
         debate_rounds_used: usize,
         duration: Duration,
     },
+    LifeTick {
+        valence: f32,
+        arousal: f32,
+        curiosity: f32,
+    },
+    LifeInitiative {
+        trigger: String,
+        message_preview: String,
+    },
+    LifeDreamComplete {
+        insight_preview: String,
+    },
 }
 
 /// Numeric metrics

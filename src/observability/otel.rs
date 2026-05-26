@@ -208,7 +208,10 @@ impl Observer for OtelObserver {
             }
             ObserverEvent::LlmRequest { .. }
             | ObserverEvent::ToolCallStart { .. }
-            | ObserverEvent::TurnComplete => {}
+            | ObserverEvent::TurnComplete
+            | ObserverEvent::LifeTick { .. }
+            | ObserverEvent::LifeInitiative { .. }
+            | ObserverEvent::LifeDreamComplete { .. } => {}
             ObserverEvent::LlmResponse {
                 provider,
                 model,
