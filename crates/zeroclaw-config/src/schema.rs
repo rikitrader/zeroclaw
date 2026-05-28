@@ -155,6 +155,17 @@ pub struct Config {
     #[nested]
     pub cloud_ops: CloudOpsConfig,
 
+    /// Shadow-git snapshot configuration (`[snapshot]`).
+    ///
+    /// When `auto_track_enabled = true`, the daemon runs a background tracker
+    /// that captures each agent's workspace as a git tree object every
+    /// `auto_track_interval_secs`. Operators can then `zeroclaw snapshot
+    /// patch <hash>` or `… undo` to roll back without consulting the agent's
+    /// own history. Off by default — opt in per install.
+    #[serde(default)]
+    #[nested]
+    pub snapshot: SnapshotConfig,
+
     /// Conversational AI agent builder configuration (`[conversational_ai]`).
     ///
     /// Experimental / future feature — not yet wired into the agent runtime.
@@ -12707,6 +12718,43 @@ impl Default for CloudOpsConfig {
     }
 }
 
+/// Shadow-git snapshot daemon configuration (`[snapshot]`).
+///
+/// Drives the background tracker that captures each agent's workspace as a
+/// git tree object on a fixed interval. Snapshots accumulate under
+/// `<config.data_dir>/snapshot/<project_hash>/<worktree_hash>/`; pruning
+/// happens via the same scheduled tracker (weekly, matching
+/// `ShadowSnapshot::cleanup`'s 7-day prune window).
+#[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "snapshot"]
+pub struct SnapshotConfig {
+    /// Enable the background auto-tracker. Default: false.
+    #[serde(default)]
+    pub auto_track_enabled: bool,
+    /// Seconds between consecutive captures across all configured agents.
+    /// Minimum effective interval is 15 — smaller values are clamped at startup.
+    #[serde(default = "default_snapshot_auto_track_interval_secs")]
+    pub auto_track_interval_secs: u64,
+    /// Hours between cleanup passes that prune unreachable shadow git
+    /// objects older than 7 days. `0` disables cleanup.
+    #[serde(default = "default_snapshot_cleanup_interval_hours")]
+    pub cleanup_interval_hours: u64,
+}
+
+fn default_snapshot_auto_track_interval_secs() -> u64 { 60 }
+fn default_snapshot_cleanup_interval_hours() -> u64 { 24 }
+
+impl Default for SnapshotConfig {
+    fn default() -> Self {
+        Self {
+            auto_track_enabled: false,
+            auto_track_interval_secs: default_snapshot_auto_track_interval_secs(),
+            cleanup_interval_hours: default_snapshot_cleanup_interval_hours(),
+        }
+    }
+}
+
 impl CloudOpsConfig {
     pub fn validate(&self) -> Result<()> {
         if self.enabled {
@@ -13018,6 +13066,7 @@ impl Default for Config {
             cognitive: Default::default(),
             life: Default::default(),
             conscience: Default::default(),
+            snapshot: Default::default(),
             cosmic_brain: Default::default(),
             taskqueue: Default::default(),
             sce: Default::default(),
@@ -16465,6 +16514,7 @@ auto_save = true
             cognitive: Default::default(),
             life: Default::default(),
             conscience: Default::default(),
+            snapshot: Default::default(),
             cosmic_brain: Default::default(),
             taskqueue: Default::default(),
             sce: Default::default(),
@@ -17079,6 +17129,7 @@ default_temperature = 0.7
             cognitive: Default::default(),
             life: Default::default(),
             conscience: Default::default(),
+            snapshot: Default::default(),
             cosmic_brain: Default::default(),
             taskqueue: Default::default(),
             sce: Default::default(),
