@@ -45,18 +45,19 @@ function roleLabel(role: PersistedChatBubble['role']): string {
   return role === 'user' ? 'User' : 'Agent';
 }
 
-function fmtTime(ts: string): string {
+function fmtTime(ts: string | Date): string {
   try {
-    return new Date(ts).toISOString().replace('T', ' ').slice(0, 19);
+    const d = ts instanceof Date ? ts : new Date(ts);
+    return d.toISOString().replace('T', ' ').slice(0, 19);
   } catch {
-    return ts;
+    return String(ts);
   }
 }
 
 // ─── Markdown ────────────────────────────────────────────────────────────────
 
 export function toMarkdown(
-  messages: PersistedChatBubble[],
+  messages: ExportableMessage[],
   opts: ExportOptions = {},
 ): string {
   const o = resolve(opts);
@@ -100,21 +101,26 @@ export function toMarkdown(
 // ─── JSON ────────────────────────────────────────────────────────────────────
 
 export function toJSON(
-  messages: PersistedChatBubble[],
+  messages: ExportableMessage[],
   opts: ExportOptions = {},
 ): string {
   const o = resolve(opts);
   const filtered = messages.map((m) => {
-    const out: PersistedChatBubble & Record<string, unknown> = { ...m };
-    if (!o.includeThinking) delete out.thinking;
-    if (!o.includeToolCalls) delete (out as { toolCall?: unknown }).toolCall;
-    else if (o.truncateToolOutput > 0 && out.toolCall?.output) {
-      out.toolCall = {
-        ...out.toolCall,
-        output: truncate(out.toolCall.output, o.truncateToolOutput),
-      };
+    const out: Record<string, unknown> = {
+      role: m.role,
+      content: m.content,
+      // Normalise Date → ISO string for stable JSON output across runtimes.
+      timestamp: m.timestamp instanceof Date ? m.timestamp.toISOString() : m.timestamp,
+    };
+    if (o.includeThinking && m.thinking) out.thinking = m.thinking;
+    if (o.includeToolCalls && m.toolCall) {
+      const tc = { ...m.toolCall };
+      if (o.truncateToolOutput > 0 && tc.output) {
+        tc.output = truncate(tc.output, o.truncateToolOutput);
+      }
+      out.toolCall = tc;
     }
-    if (!o.includeTimestamps) delete (out as { timestamp?: unknown }).timestamp;
+    if (!o.includeTimestamps) delete out.timestamp;
     return out;
   });
   return JSON.stringify(
@@ -131,7 +137,7 @@ export function toJSON(
 // ─── Plaintext ───────────────────────────────────────────────────────────────
 
 export function toPlaintext(
-  messages: PersistedChatBubble[],
+  messages: ExportableMessage[],
   opts: ExportOptions = {},
 ): string {
   const o = resolve(opts);
@@ -170,7 +176,7 @@ function esc(s: string): string {
 }
 
 export function toHTML(
-  messages: PersistedChatBubble[],
+  messages: ExportableMessage[],
   opts: ExportOptions = {},
 ): string {
   const o = resolve(opts);
