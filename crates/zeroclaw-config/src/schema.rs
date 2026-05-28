@@ -2824,6 +2824,19 @@ pub struct AliasedAgentConfig {
     #[serde(default)]
     pub transcription_provider: crate::providers::TranscriptionProviderRef,
 
+    /// Optional dedicated gateway port for this agent.
+    ///
+    /// When `Some(port)`, the daemon will (in a follow-up phase) spawn a
+    /// per-agent gateway listening on `gateway.host:port`. Until that
+    /// daemon-side wiring lands, the field is parsed and validated
+    /// (uniqueness + range) but not yet acted on. When `None`, the agent
+    /// uses the shared `gateway.port`.
+    ///
+    /// First slice of `Plans/binary-seeking-umbrella.md` Phase 2:
+    /// schema + uniqueness validation now, spawning later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_port: Option<u16>,
+
     // ── Agent loop / runtime tunables (folded from `[agent]` ──────
     // These are per-agent. Defaults preserve the legacy single-agent
     // behavior so an unconfigured agent runs identically to a config
@@ -2956,6 +2969,7 @@ impl Default for AliasedAgentConfig {
             cron_jobs: Vec::new(),
             tts_provider: crate::providers::TtsProviderRef::default(),
             transcription_provider: crate::providers::TranscriptionProviderRef::default(),
+            gateway_port: None,
             compact_context: default_agent_compact_context(),
             max_tool_iterations: default_agent_max_tool_iterations(),
             max_history_messages: default_agent_max_history_messages(),
@@ -3249,6 +3263,44 @@ impl Config {
             .join("agents")
             .join(agent_alias)
             .join("workspace")
+    }
+
+    /// Effective gateway port for `agent_alias`. Falls back to the global
+    /// `gateway.port` when the agent has no per-agent override set.
+    ///
+    /// First-slice accessor for `Plans/binary-seeking-umbrella.md` Phase 2:
+    /// the daemon spawn loop will eventually consult this to decide whether
+    /// to spin up an agent-dedicated gateway. Today it surfaces the
+    /// resolved port for diagnostic / dashboard use.
+    #[must_use]
+    pub fn agent_gateway_port(&self, agent_alias: &str) -> u16 {
+        self.agents
+            .get(agent_alias)
+            .and_then(|a| a.gateway_port)
+            .unwrap_or(self.gateway.port)
+    }
+
+    /// Validate that no two agents (and no agent + the global gateway)
+    /// request the same port. Called from [`Config::validate`]. Returns
+    /// the conflicting `(alias_a, alias_b, port)` triple on the first
+    /// duplicate found, so the error message can name both sides.
+    ///
+    /// Where the global gateway is the conflicting side, `alias_b` is
+    /// the literal string `"<global gateway>"`.
+    pub fn find_duplicate_agent_gateway_ports(
+        &self,
+    ) -> Option<(String, String, u16)> {
+        let mut seen: std::collections::HashMap<u16, String> =
+            std::collections::HashMap::new();
+        seen.insert(self.gateway.port, "<global gateway>".to_string());
+        for (alias, agent) in &self.agents {
+            let Some(port) = agent.gateway_port else { continue };
+            if let Some(prev) = seen.get(&port) {
+                return Some((prev.clone(), alias.clone(), port));
+            }
+            seen.insert(port, alias.clone());
+        }
+        None
     }
 
     /// `<install>/shared/` — directory shared across every agent on this
@@ -14678,6 +14730,17 @@ impl Config {
             anyhow::bail!("{msg}");
         }
 
+        // Agent gateway-port uniqueness — Plans/binary-seeking-umbrella.md
+        // Phase 1 invariant. Fail loud so a misconfigured second agent does
+        // not silently bind onto the same port as the first.
+        if let Some((a, b, port)) = self.find_duplicate_agent_gateway_ports() {
+            anyhow::bail!(
+                "gateway port {port} is claimed by both {a:?} and {b:?}; \
+                 each agent's [agents.<alias>].gateway_port must be unique \
+                 and distinct from the global gateway.port"
+            );
+        }
+
         // Notion
         if self.notion.enabled {
             if self.notion.database_id.trim().is_empty() {
@@ -15766,6 +15829,90 @@ mod tests {
     use tempfile::TempDir;
     use tokio::sync::MutexGuard;
     use tokio::test;
+
+    // ── Agent gateway-port (Plans/binary-seeking-umbrella.md Phase 1) ──
+
+    #[test]
+    async fn agent_gateway_port_falls_back_to_global_when_unset() {
+        let mut config = Config::default();
+        config.gateway.port = 42617;
+        let mut agent = AliasedAgentConfig::default();
+        agent.gateway_port = None;
+        config.agents.insert("default".into(), agent);
+
+        assert_eq!(config.agent_gateway_port("default"), 42617);
+    }
+
+    #[test]
+    async fn agent_gateway_port_uses_per_agent_override_when_set() {
+        let mut config = Config::default();
+        config.gateway.port = 42617;
+        let mut agent = AliasedAgentConfig::default();
+        agent.gateway_port = Some(9001);
+        config.agents.insert("support".into(), agent);
+
+        assert_eq!(config.agent_gateway_port("support"), 9001);
+    }
+
+    #[test]
+    async fn agent_gateway_port_returns_global_for_unknown_alias() {
+        let mut config = Config::default();
+        config.gateway.port = 42617;
+
+        assert_eq!(config.agent_gateway_port("does-not-exist"), 42617);
+    }
+
+    #[test]
+    async fn duplicate_gateway_ports_between_agents_are_detected() {
+        let mut config = Config::default();
+        let mut a = AliasedAgentConfig::default();
+        a.gateway_port = Some(9001);
+        let mut b = AliasedAgentConfig::default();
+        b.gateway_port = Some(9001);
+        config.agents.insert("alpha".into(), a);
+        config.agents.insert("beta".into(), b);
+
+        let dup = config.find_duplicate_agent_gateway_ports();
+        assert!(dup.is_some(), "duplicate must be detected");
+        let (x, y, port) = dup.unwrap();
+        assert_eq!(port, 9001);
+        // Order of iteration over HashMap is non-deterministic, so just
+        // check the pair regardless of which alias landed first.
+        let mut both = [x, y];
+        both.sort();
+        assert_eq!(both, ["alpha".to_string(), "beta".to_string()]);
+    }
+
+    #[test]
+    async fn agent_gateway_port_colliding_with_global_is_detected() {
+        let mut config = Config::default();
+        config.gateway.port = 42617;
+        let mut a = AliasedAgentConfig::default();
+        a.gateway_port = Some(42617);
+        config.agents.insert("alpha".into(), a);
+
+        let dup = config.find_duplicate_agent_gateway_ports();
+        assert!(
+            dup.is_some(),
+            "agent gateway_port equal to global gateway.port must be flagged"
+        );
+        let (_, _, port) = dup.unwrap();
+        assert_eq!(port, 42617);
+    }
+
+    #[test]
+    async fn unique_agent_gateway_ports_pass() {
+        let mut config = Config::default();
+        config.gateway.port = 42617;
+        let mut a = AliasedAgentConfig::default();
+        a.gateway_port = Some(9001);
+        let mut b = AliasedAgentConfig::default();
+        b.gateway_port = Some(9002);
+        config.agents.insert("alpha".into(), a);
+        config.agents.insert("beta".into(), b);
+
+        assert!(config.find_duplicate_agent_gateway_ports().is_none());
+    }
 
     // ── Tilde expansion ───────────────────────────────────────
 
