@@ -291,7 +291,8 @@ impl ShadowSnapshot {
             let run = &ops[i..end];
 
             if run.len() == 1 {
-                self.revert_one(&ops[i].hash, &ops[i].abs, &ops[i].rel).await;
+                self.revert_one(&ops[i].hash, &ops[i].abs, &ops[i].rel)
+                    .await;
                 i = end;
                 continue;
             }
@@ -462,8 +463,16 @@ impl ShadowSnapshot {
             let binary = parts[0] == "-" && parts[1] == "-";
             rows.push(Row {
                 file: parts[2].to_string(),
-                adds: if binary { 0 } else { parts[0].parse().unwrap_or(0) },
-                dels: if binary { 0 } else { parts[1].parse().unwrap_or(0) },
+                adds: if binary {
+                    0
+                } else {
+                    parts[0].parse().unwrap_or(0)
+                },
+                dels: if binary {
+                    0
+                } else {
+                    parts[1].parse().unwrap_or(0)
+                },
                 binary,
             });
         }

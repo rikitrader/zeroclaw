@@ -58,7 +58,13 @@ mod tests {
         let unknown = tmp.path().join("never-inserted");
         // Must not panic, must not poison the lock.
         remove(&unknown);
-        assert!(REGISTRY.read().unwrap().get(&canonical_key(&unknown)).is_none());
+        assert!(
+            REGISTRY
+                .read()
+                .unwrap()
+                .get(&canonical_key(&unknown))
+                .is_none()
+        );
     }
 
     #[test]
@@ -70,5 +76,4 @@ mod tests {
         // No .git anywhere above `nested` → ShadowSnapshot::for_session returns None.
         assert!(get_or_create(&nested, data.path()).is_none());
     }
-
 }

@@ -2,8 +2,8 @@
 //! These types are additive to the upstream zeroclaw-config schema.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use serde_json;
+use std::path::PathBuf;
 
 // BotRateLimiter uses atomics but is not serializable — skipped from config.
 // We use a placeholder for fields that reference upstream types not available here.
@@ -1388,7 +1388,6 @@ fn default_config_dir() -> anyhow::Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
     Ok(home.join(".zeroclaw"))
 }
-
 
 // --- HasPropKind implementations for X0 config types ---
 // These are required by the Configurable derive macro on Config.

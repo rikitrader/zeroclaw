@@ -538,7 +538,6 @@ pub struct Config {
     pub escalation: EscalationConfig,
 
     // --- X0 fork extensions (skipped from Configurable prop system) ---
-
     #[serde(skip)]
     pub soul: Option<crate::x0_extensions::SoulConfig>,
     #[serde(skip)]
