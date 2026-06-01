@@ -1104,11 +1104,7 @@ mod conscience_config_tests {
         // The names below are part of the public default contract — bumping
         // them is a behaviour change operators will see in their generated
         // configs, so it should be deliberate.
-        let names: Vec<&str> = cc
-            .default_norms
-            .iter()
-            .map(|n| n.name.as_str())
-            .collect();
+        let names: Vec<&str> = cc.default_norms.iter().map(|n| n.name.as_str()).collect();
         for required in [
             "no_rm_rf_root",
             "no_rm_rf_home",

@@ -3312,14 +3312,13 @@ impl Config {
     ///
     /// Where the global gateway is the conflicting side, `alias_b` is
     /// the literal string `"<global gateway>"`.
-    pub fn find_duplicate_agent_gateway_ports(
-        &self,
-    ) -> Option<(String, String, u16)> {
-        let mut seen: std::collections::HashMap<u16, String> =
-            std::collections::HashMap::new();
+    pub fn find_duplicate_agent_gateway_ports(&self) -> Option<(String, String, u16)> {
+        let mut seen: std::collections::HashMap<u16, String> = std::collections::HashMap::new();
         seen.insert(self.gateway.port, "<global gateway>".to_string());
         for (alias, agent) in &self.agents {
-            let Some(port) = agent.gateway_port else { continue };
+            let Some(port) = agent.gateway_port else {
+                continue;
+            };
             if let Some(prev) = seen.get(&port) {
                 return Some((prev.clone(), alias.clone(), port));
             }
@@ -12819,8 +12818,12 @@ pub struct SnapshotConfig {
     pub cleanup_interval_hours: u64,
 }
 
-fn default_snapshot_auto_track_interval_secs() -> u64 { 60 }
-fn default_snapshot_cleanup_interval_hours() -> u64 { 24 }
+fn default_snapshot_auto_track_interval_secs() -> u64 {
+    60
+}
+fn default_snapshot_cleanup_interval_hours() -> u64 {
+    24
+}
 
 impl Default for SnapshotConfig {
     fn default() -> Self {
@@ -15954,9 +15957,7 @@ mod tests {
         config.agents.insert("alpha".into(), a);
         config.agents.insert("beta".into(), b);
 
-        let isolated = config
-            .isolated_to_agent("alpha")
-            .expect("alpha has a port");
+        let isolated = config.isolated_to_agent("alpha").expect("alpha has a port");
         assert_eq!(isolated.agents.len(), 1);
         assert!(isolated.agents.contains_key("alpha"));
         assert!(!isolated.agents.contains_key("beta"));
