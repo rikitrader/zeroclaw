@@ -102,13 +102,14 @@ jobs:
           - name: all features
             args: --features ci-all
             sys_deps: libudev-dev
-          # The `zeroclawlabs` binary is an agent-runtime CLI: agent-runtime
-          # is a default feature and its 12 command groups can't compile
-          # without it. The meaningful no-default-features guarantee is that
-          # the library crates stay feature-clean for downstream consumers,
-          # so the binary is excluded here.
+          # Library-crate guarantee: the libs must stay feature-clean for
+          # downstream consumers. Two members are excluded:
+          #   - zeroclawlabs: the agent-runtime CLI binary; agent-runtime is a
+          #     default feature and its 12 command groups can't compile without it.
+          #   - zeroclaw-desktop: the Tauri app, which needs Linux glib/gtk
+          #     system libraries this check job doesn't install.
           - name: no default features
-            args: --no-default-features --workspace --exclude zeroclawlabs
+            args: --no-default-features --workspace --exclude zeroclawlabs --exclude zeroclaw-desktop
             sys_deps: ""
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -147,9 +148,10 @@ jobs:
       - name: Ensure web/dist placeholder exists
         run: mkdir -p web/dist && touch web/dist/.gitkeep
       - name: Check (32-bit, no default features)
-        # Library crates only — the zeroclawlabs binary requires agent-runtime
-        # (a default feature) and is validated on the native-target build jobs.
-        run: cargo check --locked --target i686-unknown-linux-gnu --no-default-features --workspace --exclude zeroclawlabs
+        # Library crates only. zeroclawlabs (agent-runtime CLI) is validated on
+        # the native-target build jobs; zeroclaw-desktop (Tauri) needs glib/gtk
+        # system libs not installed here.
+        run: cargo check --locked --target i686-unknown-linux-gnu --no-default-features --workspace --exclude zeroclawlabs --exclude zeroclaw-desktop
 
   bench:
     name: Benchmarks Compile
