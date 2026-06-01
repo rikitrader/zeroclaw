@@ -1089,9 +1089,11 @@ mod conscience_config_tests {
         let mut cc = ConscienceConfig::default();
         let adjusted = cc.normalize();
         assert_eq!(adjusted, 0);
-        assert_eq!(cc.allow_threshold, 0.80);
-        assert_eq!(cc.ask_threshold, 0.55);
-        assert_eq!(cc.block_threshold, 0.45);
+        // Defaults rebalanced in #23 (0.80/0.55/0.45 → 0.70/0.50/0.30); a
+        // well-formed default config must still normalize to a no-op.
+        assert_eq!(cc.allow_threshold, 0.70);
+        assert_eq!(cc.ask_threshold, 0.50);
+        assert_eq!(cc.block_threshold, 0.30);
     }
 
     #[test]
