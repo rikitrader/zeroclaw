@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="ZEROCLAW-X0" width="180" />
+  <img src=".github/media/banner.png" alt="ZEROCLAW-X0 — Cognitive AI Agent Runtime in Rust" width="100%" />
 </p>
 
 <h1 align="center">ZEROCLAW-X0</h1>
@@ -17,7 +17,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License: MIT" /></a>
   <img src="https://img.shields.io/badge/rust-100%25-orange?style=flat-square&logo=rust" alt="100% Rust" />
   <img src="https://img.shields.io/badge/LOC-140K+-black?style=flat-square" alt="Lines of Code" />
-  <img src="https://img.shields.io/badge/tests-5800+-brightgreen?style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-8209-brightgreen?style=flat-square" alt="Tests" />
   <img src="https://img.shields.io/badge/binary-17MB-purple?style=flat-square" alt="Binary Size" />
 </p>
 
@@ -38,6 +38,31 @@
   <a href="README.ja.md">日本語</a> &middot;
   <a href="README.ru.md">Русский</a>
 </p>
+
+---
+
+## 📌 Latest — Production-Readiness Audit (2026-06-28)
+
+**What changed:** the full workspace was audited and hardened ahead of building
+production applications on this runtime — **8,209 tests passing / 0 failed**
+(`cargo test --workspace`), `clippy --workspace --all-targets -D warnings` clean
+on both the default build and `--features x0-extended`, and all 13 CI checks
+green across macOS, Linux, and Windows. Shipped in the same pass: **dotted
+`<family>.<alias>` model-route provider references** — routes can now resolve
+API key and URI per model alias from `providers.models`, with `doctor`
+validating configured refs.
+
+**Why:** ZEROCLAW-X0 is two runtimes in one. The **default build is the
+production V3 agent runtime** — boring, audited, dependency-verified. The
+**X0 cognitive layer** (conscience gate, consciousness/continuity/cosmic
+modules) stays behind the `x0-extended` Cargo feature, OFF by default, so
+experimentation never rides into production binaries. The audit exists so that
+line holds: everything on `main` must be green under both feature sets before
+anything is built on top of it. The conscience gate (`ConscienceHook`) is wired
+live in the tool-call loop and integration-tested; Cosmic Brain Phase 2 (all
+seven modules — persistence, multi-agent, policy, counterfactual,
+consolidation, drift, constitution) is complete and tested.
+
 
 ---
 
