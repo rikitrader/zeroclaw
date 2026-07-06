@@ -14409,7 +14409,6 @@ impl MqttConfig {
     /// - At least one topic is configured
     /// - client_id is non-empty
     pub fn validate(&self) -> anyhow::Result<()> {
-
         // QoS validation
         if self.qos > 2 {
             anyhow::bail!("qos must be 0, 1, or 2, got {}", self.qos);
@@ -21153,7 +21152,6 @@ impl HasPropKind for serde_json::Value {
     // `config.toml`.
     const PROP_KIND: PropKind = PropKind::String;
 }
-
 
 /// Shadow-git snapshot daemon configuration (`[snapshot]`).
 ///

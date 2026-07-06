@@ -16,7 +16,9 @@ use crate::config::RuntimeConfig;
 pub fn create_runtime(config: &RuntimeConfig) -> anyhow::Result<Box<dyn RuntimeAdapter>> {
     match config.kind {
         zeroclaw_config::schema::RuntimeKind::Native => Ok(Box::new(NativeRuntime::new())),
-        zeroclaw_config::schema::RuntimeKind::Docker => Ok(Box::new(DockerRuntime::new(config.docker.clone()))),
+        zeroclaw_config::schema::RuntimeKind::Docker => {
+            Ok(Box::new(DockerRuntime::new(config.docker.clone())))
+        }
         #[cfg(feature = "runtime-wasm")]
         // V3 `RuntimeConfig` dropped the per-runtime `wasm` field; the WASM
         // runtime now starts from its own defaults.

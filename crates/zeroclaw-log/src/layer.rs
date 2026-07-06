@@ -587,7 +587,10 @@ fn strip_outer_quotes(s: &str) -> String {
 #[cfg(test)]
 mod e2e_tests {
     use crate as zeroclaw_log;
-    use crate::{Action, Event, EventOutcome, LogConfig, subscribe_or_install, try_install_capture_subscriber};
+    use crate::{
+        Action, Event, EventOutcome, LogConfig, subscribe_or_install,
+        try_install_capture_subscriber,
+    };
     use ::zeroclaw_api::attribution::{Attributable, ChannelKind, Role};
 
     /// Synthetic Attributable test fixture standing in for a real

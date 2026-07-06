@@ -126,8 +126,7 @@ async fn catalog_models_for_config(
         }
     }
 
-    let (models, pricing, live) =
-        zeroclaw_runtime::quickstart::model_catalog(model_provider).await;
+    let (models, pricing, live) = zeroclaw_runtime::quickstart::model_catalog(model_provider).await;
     CatalogModelsResult {
         model_provider: model_provider.to_string(),
         models,
