@@ -422,10 +422,12 @@ mod wallet;
 use config::Config;
 
 // Re-export so binary modules can use crate::<CommandEnum> while keeping a single source of truth.
+#[cfg(feature = "agent-runtime")]
+pub use zeroclaw::SnapshotCommands;
 pub use zeroclaw::{
     AgentsCommands, ChannelCommands, ChannelsCommands, CronCommands, GatewayCommands,
     HardwareCommands, IntegrationCommands, MigrateCommands, PeripheralCommands, ProvidersCommands,
-    ServiceCommands, SkillBundleCommands, SkillCommands, SnapshotCommands, SopCommands,
+    ServiceCommands, SkillBundleCommands, SkillCommands, SopCommands,
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -992,6 +994,7 @@ Examples:
   zeroclaw snapshot undo --yes                 # roll back to most recent track
   zeroclaw snapshot restore <hash> --yes       # roll back to a specific hash
   zeroclaw snapshot cleanup                    # prune objects older than 7 days")]
+    #[cfg(feature = "agent-runtime")]
     Snapshot {
         #[command(subcommand)]
         snapshot_command: SnapshotCommands,
@@ -5016,6 +5019,7 @@ async fn main() -> Result<()> {
             memory::cli::handle_command(memory_command, &config).await
         }
 
+        #[cfg(feature = "agent-runtime")]
         Commands::Snapshot { snapshot_command } => {
             zeroclaw::snapshot_cli::handle_command(snapshot_command, &config).await
         }

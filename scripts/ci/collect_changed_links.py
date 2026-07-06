@@ -48,9 +48,10 @@ def normalize_docs_files(raw: str) -> list[str]:
 def infer_base_sha(provided: str) -> str:
     if commit_exists(provided):
         return provided
-    if run_git(["rev-parse", "--verify", "origin/master"]).returncode != 0:
+    base_ref = "origin/main" if run_git(["rev-parse", "--verify", "origin/main"]).returncode == 0 else "origin/master"
+    if run_git(["rev-parse", "--verify", base_ref]).returncode != 0:
         return ""
-    proc = run_git(["merge-base", "origin/master", "HEAD"])
+    proc = run_git(["merge-base", base_ref, "HEAD"])
     candidate = proc.stdout.strip()
     return candidate if commit_exists(candidate) else ""
 
@@ -203,7 +204,10 @@ def extract_links(text: str, source_path: str) -> list[str]:
             links.append(normalized)
 
     ref_match = REF_LINK_RE.match(text)
-    if ref_match:
+    # A `[Label]:: ...` line (PowerShell static calls in fenced code, e.g.
+    # `[Environment]::SetEnvironmentVariable(...)`) is not a reference link:
+    # real ref targets never begin with ':'.
+    if ref_match and not ref_match.group(1).startswith(":"):
         normalized = normalize_link_target(ref_match.group(1), source_path)
         if normalized:
             links.append(normalized)
