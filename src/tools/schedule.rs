@@ -391,8 +391,8 @@ mod tests {
         config.agents.entry("default".to_string()).or_insert(
             crate::config::schema::AliasedAgentConfig {
                 model_provider: "openrouter.default".to_string().into(),
-                risk_profile: "default".to_string(),
-                runtime_profile: "default".to_string(),
+                risk_profile: zeroclaw_config::providers::RiskProfileRef::new("default"),
+                runtime_profile: zeroclaw_config::providers::RuntimeProfileRef::new("default"),
                 ..Default::default()
             },
         );

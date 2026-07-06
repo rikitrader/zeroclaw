@@ -118,7 +118,7 @@ async fn handle_diff(cwd: &std::path::Path, hash: &str, config: &Config) -> Resu
     let snap = snap_or_err(cwd, config)?;
     let diff = snap.diff(hash).await;
     if diff.is_empty() {
-        println!("{} no changes vs {hash}", style("·").dim());
+        println!("{} no changes vs {hash}", style("·").dim()); // i18n-exempt: fork snapshot CLI, pre-Fluent
     } else {
         print!("{diff}");
         if !diff.ends_with('\n') {
@@ -132,7 +132,7 @@ async fn handle_patch(cwd: &std::path::Path, hash: &str, config: &Config) -> Res
     let snap = snap_or_err(cwd, config)?;
     let patch = snap.patch(hash).await;
     if patch.files.is_empty() {
-        println!("{} no files changed vs {hash}", style("·").dim());
+        println!("{} no files changed vs {hash}", style("·").dim()); // i18n-exempt: fork snapshot CLI, pre-Fluent
         return Ok(());
     }
     println!(
@@ -172,13 +172,13 @@ async fn handle_restore(
             eprintln!("  {}", f.display());
         }
         if patch.files.len() > 20 {
-            eprintln!("  … and {} more", patch.files.len() - 20);
+            eprintln!("  … and {} more", patch.files.len() - 20); // i18n-exempt: fork snapshot CLI, pre-Fluent
         }
-        eprintln!("Re-run with --yes to proceed.");
+        eprintln!("Re-run with --yes to proceed."); // i18n-exempt: fork snapshot CLI, pre-Fluent
         anyhow::bail!("aborted");
     }
     snap.restore(hash).await;
-    println!("{} restored to {hash}", style("✓").green());
+    println!("{} restored to {hash}", style("✓").green()); // i18n-exempt: fork snapshot CLI, pre-Fluent
     Ok(())
 }
 
@@ -204,7 +204,7 @@ async fn handle_revert(cwd: &std::path::Path, yes: bool, config: &Config) -> Res
         .context("failed to read patch JSON from stdin")?;
     let patches: Vec<Patch> = serde_json::from_str(&buf).context("invalid patch JSON on stdin")?;
     if patches.is_empty() {
-        println!("{} no patches supplied", style("·").dim());
+        println!("{} no patches supplied", style("·").dim()); // i18n-exempt: fork snapshot CLI, pre-Fluent
         return Ok(());
     }
     let snap = snap_or_err(cwd, config)?;
@@ -216,7 +216,7 @@ async fn handle_revert(cwd: &std::path::Path, yes: bool, config: &Config) -> Res
             total,
             patches.len()
         );
-        eprintln!("Re-run with --yes to proceed.");
+        eprintln!("Re-run with --yes to proceed."); // i18n-exempt: fork snapshot CLI, pre-Fluent
         anyhow::bail!("aborted");
     }
     snap.revert(&patches).await;

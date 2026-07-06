@@ -89,9 +89,9 @@ impl HookHandler for ContinuityHook {
 
     async fn before_llm_call(
         &self,
-        mut messages: Vec<ChatMessage>,
-        model: String,
-    ) -> HookResult<(Vec<ChatMessage>, String)> {
+        messages: &mut Vec<ChatMessage>,
+        _model: &mut String,
+    ) -> HookResult<()> {
         // Inject the learned preferences as a leading system message so the
         // model reuses them this turn. `to_prompt_context` already filters
         // to confidence ≥ 0.3 and returns empty when there's nothing worth
@@ -103,7 +103,7 @@ impl HookHandler for ContinuityHook {
         if !context.is_empty() {
             messages.insert(0, ChatMessage::system(context));
         }
-        HookResult::Continue((messages, model))
+        HookResult::Continue(())
     }
 
     async fn on_after_tool_call(&self, tool: &str, result: &ToolResult, _duration: Duration) {
@@ -193,11 +193,10 @@ mod tests {
             )
             .unwrap();
 
-        match hook
-            .before_llm_call(vec![ChatMessage::user("hello")], "m".into())
-            .await
-        {
-            HookResult::Continue((out, _)) => {
+        let mut out = vec![ChatMessage::user("hello")];
+        let mut model = String::from("m");
+        match hook.before_llm_call(&mut out, &mut model).await {
+            HookResult::Continue(()) => {
                 assert_eq!(
                     out.len(),
                     2,
@@ -217,11 +216,10 @@ mod tests {
     #[tokio::test]
     async fn before_llm_call_is_noop_without_preferences() {
         let hook = ContinuityHook::new();
-        match hook
-            .before_llm_call(vec![ChatMessage::user("hi")], "m".into())
-            .await
-        {
-            HookResult::Continue((out, _)) => {
+        let mut out = vec![ChatMessage::user("hi")];
+        let mut model = String::from("m");
+        match hook.before_llm_call(&mut out, &mut model).await {
+            HookResult::Continue(()) => {
                 assert_eq!(out.len(), 1, "an empty model must inject nothing");
                 assert_eq!(out[0].role, "user");
             }
