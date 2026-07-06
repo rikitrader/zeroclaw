@@ -366,14 +366,14 @@ pub fn run_quick_setup(
     println!();
     println!("  {}", style("Next steps:").white().bold());
     if credential_override.is_none() {
-        println!("    1. Set your API key:  export OPENROUTER_API_KEY=\"sk-...\"");
-        println!("    2. Or edit:           ~/.zeroclaw/config.toml");
-        println!("    3. Chat:              zeroclaw agent -m \"Hello!\"");
-        println!("    4. Gateway:           zeroclaw gateway");
+        println!("    1. Set your API key:  export OPENROUTER_API_KEY=\"sk-...\""); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
+        println!("    2. Or edit:           ~/.zeroclaw/config.toml"); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
+        println!("    3. Chat:              zeroclaw agent -m \"Hello!\""); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
+        println!("    4. Gateway:           zeroclaw gateway"); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
     } else {
-        println!("    1. Chat:     zeroclaw agent -m \"Hello!\"");
-        println!("    2. Gateway:  zeroclaw gateway");
-        println!("    3. Status:   zeroclaw status");
+        println!("    1. Chat:     zeroclaw agent -m \"Hello!\""); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
+        println!("    2. Gateway:  zeroclaw gateway"); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
+        println!("    3. Status:   zeroclaw status"); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
     }
     println!();
 
@@ -2468,13 +2468,13 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     .interact_text()?;
 
                 if token.trim().is_empty() {
-                    println!("  {} Skipped", style("→").dim());
+                    println!("  {} Skipped", style("→").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                     continue;
                 }
 
                 // Test connection (run entirely in separate thread — reqwest::blocking Response
                 // must be used and dropped there to avoid "Cannot drop a runtime" panic)
-                print!("  {} Testing connection... ", style("⏳").dim());
+                print!("  {} Testing connection... ", style("⏳").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                 let token_clone = token.clone();
                 let thread_result = std::thread::spawn(move || {
                     let client = reqwest::blocking::Client::new();
@@ -2568,12 +2568,12 @@ fn setup_channels() -> Result<ChannelsConfig> {
                 let token: String = Input::new().with_prompt("  Bot token").interact_text()?;
 
                 if token.trim().is_empty() {
-                    println!("  {} Skipped", style("→").dim());
+                    println!("  {} Skipped", style("→").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                     continue;
                 }
 
                 // Test connection (run entirely in separate thread — Response must be used/dropped there)
-                print!("  {} Testing connection... ", style("⏳").dim());
+                print!("  {} Testing connection... ", style("⏳").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                 let token_clone = token.clone();
                 let thread_result = std::thread::spawn(move || {
                     let client = reqwest::blocking::Client::new();
@@ -2676,12 +2676,12 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     .interact_text()?;
 
                 if token.trim().is_empty() {
-                    println!("  {} Skipped", style("→").dim());
+                    println!("  {} Skipped", style("→").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                     continue;
                 }
 
                 // Test connection (run entirely in separate thread — Response must be used/dropped there)
-                print!("  {} Testing connection... ", style("⏳").dim());
+                print!("  {} Testing connection... ", style("⏳").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                 let token_clone = token.clone();
                 let thread_result = std::thread::spawn(move || {
                     let client = reqwest::blocking::Client::new();
@@ -2716,7 +2716,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                         );
                     }
                     Ok(Ok((true, false, _, err))) => {
-                        println!("\r  {} Slack error: {err}", style("❌").red().bold());
+                        println!("\r  {} Slack error: {err}", style("❌").red().bold()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                         continue;
                     }
                     _ => {
@@ -2772,7 +2772,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     "default".to_string(),
                     SlackConfig {
                         enabled: true,
-                        bot_token: token,
+                        bot_token: Some(token),
                         app_token: if app_token.is_empty() {
                             None
                         } else {
@@ -2854,7 +2854,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     .interact_text()?;
 
                 if homeserver.trim().is_empty() {
-                    println!("  {} Skipped", style("→").dim());
+                    println!("  {} Skipped", style("→").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                     continue;
                 }
 
@@ -2862,13 +2862,13 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     Input::new().with_prompt("  Access token").interact_text()?;
 
                 if access_token.trim().is_empty() {
-                    println!("  {} Skipped — token required", style("→").dim());
+                    println!("  {} Skipped — token required", style("→").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                     continue;
                 }
 
                 // Test connection (run entirely in separate thread — Response must be used/dropped there)
                 let hs = homeserver.trim_end_matches('/');
-                print!("  {} Testing connection... ", style("⏳").dim());
+                print!("  {} Testing connection... ", style("⏳").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                 let hs_owned = hs.to_string();
                 let access_token_clone = access_token.clone();
                 let thread_result = std::thread::spawn(move || {
@@ -2976,7 +2976,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     .interact_text()?;
 
                 if access_token.trim().is_empty() {
-                    println!("  {} Skipped", style("→").dim());
+                    println!("  {} Skipped", style("→").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                     continue;
                 }
 
@@ -2985,7 +2985,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     .interact_text()?;
 
                 if phone_number_id.trim().is_empty() {
-                    println!("  {} Skipped — phone number ID required", style("→").dim());
+                    println!("  {} Skipped — phone number ID required", style("→").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                     continue;
                 }
 
@@ -2995,7 +2995,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     .interact_text()?;
 
                 // Test connection (run entirely in separate thread — Response must be used/dropped there)
-                print!("  {} Testing connection... ", style("⏳").dim());
+                print!("  {} Testing connection... ", style("⏳").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                 let phone_number_id_clone = phone_number_id.clone();
                 let access_token_clone = access_token.clone();
                 let thread_result = std::thread::spawn(move || {
@@ -3072,7 +3072,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     .interact_text()?;
 
                 if server.trim().is_empty() {
-                    println!("  {} Skipped", style("→").dim());
+                    println!("  {} Skipped", style("→").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                     continue;
                 }
 
@@ -3084,7 +3084,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                 let port: u16 = match port_str.trim().parse() {
                     Ok(p) => p,
                     Err(_) => {
-                        println!("  {} Invalid port, using 6697", style("→").dim());
+                        println!("  {} Invalid port, using 6697", style("→").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                         6697
                     }
                 };
@@ -3093,7 +3093,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     Input::new().with_prompt("  Bot nickname").interact_text()?;
 
                 if nickname.trim().is_empty() {
-                    println!("  {} Skipped — nickname required", style("→").dim());
+                    println!("  {} Skipped — nickname required", style("→").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                     continue;
                 }
 
@@ -3254,7 +3254,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     .interact_text()?;
 
                 if client_id.trim().is_empty() {
-                    println!("  {} Skipped", style("→").dim());
+                    println!("  {} Skipped", style("→").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                     continue;
                 }
 
@@ -3263,7 +3263,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     .interact_text()?;
 
                 // Test connection
-                print!("  {} Testing connection... ", style("⏳").dim());
+                print!("  {} Testing connection... ", style("⏳").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                 let client = reqwest::blocking::Client::new();
                 let body = serde_json::json!({
                     "clientId": client_id,
@@ -3326,7 +3326,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                 let app_id: String = Input::new().with_prompt("  App ID").interact_text()?;
 
                 if app_id.trim().is_empty() {
-                    println!("  {} Skipped", style("→").dim());
+                    println!("  {} Skipped", style("→").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                     continue;
                 }
 
@@ -3334,7 +3334,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     Input::new().with_prompt("  App Secret").interact_text()?;
 
                 // Test connection
-                print!("  {} Testing connection... ", style("⏳").dim());
+                print!("  {} Testing connection... ", style("⏳").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                 let client = reqwest::blocking::Client::new();
                 let body = serde_json::json!({
                     "appId": app_id,
@@ -3475,7 +3475,7 @@ fn setup_tunnel() -> Result<crate::config::TunnelConfig> {
                 .with_prompt("  Cloudflare tunnel token")
                 .interact_text()?;
             if token.trim().is_empty() {
-                println!("  {} Skipped", style("→").dim());
+                println!("  {} Skipped", style("→").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                 TunnelConfig::default()
             } else {
                 println!(
@@ -3525,7 +3525,7 @@ fn setup_tunnel() -> Result<crate::config::TunnelConfig> {
                 .with_prompt("  ngrok auth token")
                 .interact_text()?;
             if auth_token.trim().is_empty() {
-                println!("  {} Skipped", style("→").dim());
+                println!("  {} Skipped", style("→").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                 TunnelConfig::default()
             } else {
                 let domain: String = Input::new()
@@ -3560,7 +3560,7 @@ fn setup_tunnel() -> Result<crate::config::TunnelConfig> {
                 .with_prompt("  Start command")
                 .interact_text()?;
             if cmd.trim().is_empty() {
-                println!("  {} Skipped", style("→").dim());
+                println!("  {} Skipped", style("→").dim()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
                 TunnelConfig::default()
             } else {
                 println!(
@@ -3905,9 +3905,9 @@ fn print_summary(config: &Config) {
     println!();
 
     println!("  {}", style("Quick summary:").white().bold());
-    println!("    {} Provider:      openrouter", style("🤖").cyan());
-    println!("    {} Model:         (default)", style("🧠").cyan());
-    println!("    {} Autonomy:      supervised", style("🛡️").cyan());
+    println!("    {} Provider:      openrouter", style("🤖").cyan()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
+    println!("    {} Model:         (default)", style("🧠").cyan()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
+    println!("    {} Autonomy:      supervised", style("🛡️").cyan()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
     println!(
         "    {} Memory:        {} (auto-save: {})",
         style("🧠").cyan(),
@@ -3979,7 +3979,7 @@ fn print_summary(config: &Config) {
     );
 
     // Secrets
-    println!("    {} Secrets:       configured", style("🔒").cyan());
+    println!("    {} Secrets:       configured", style("🔒").cyan()); // i18n-exempt: fork onboarding wizard, pre-Fluent legacy output
 
     // Gateway
     println!(

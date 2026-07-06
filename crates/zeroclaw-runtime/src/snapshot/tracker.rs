@@ -67,7 +67,7 @@ pub fn spawn_tracker(config: Config) -> Option<JoinHandle<()>> {
         "snapshot auto-tracker starting"
     );
 
-    Some(tokio::spawn(async move {
+    Some(zeroclaw_spawn::spawn!(async move {
         let mut capture_ticker = tokio::time::interval(Duration::from_secs(interval_secs));
         let mut cleanup_ticker = tokio::time::interval(Duration::from_secs(
             cleanup_interval_hours.saturating_mul(3600).max(1),

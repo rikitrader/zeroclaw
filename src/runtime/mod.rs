@@ -14,26 +14,22 @@ use crate::config::RuntimeConfig;
 
 /// Factory: create the right runtime from config
 pub fn create_runtime(config: &RuntimeConfig) -> anyhow::Result<Box<dyn RuntimeAdapter>> {
-    match config.kind.as_str() {
-        "native" => Ok(Box::new(NativeRuntime::new())),
-        "docker" => Ok(Box::new(DockerRuntime::new(config.docker.clone()))),
+    match config.kind {
+        zeroclaw_config::schema::RuntimeKind::Native => Ok(Box::new(NativeRuntime::new())),
+        zeroclaw_config::schema::RuntimeKind::Docker => Ok(Box::new(DockerRuntime::new(config.docker.clone()))),
         #[cfg(feature = "runtime-wasm")]
         // V3 `RuntimeConfig` dropped the per-runtime `wasm` field; the WASM
         // runtime now starts from its own defaults.
-        "wasm" => Ok(Box::new(WasmRuntime::new(
+        zeroclaw_config::schema::RuntimeKind::Wasm => Ok(Box::new(WasmRuntime::new(
             crate::config::WasmRuntimeConfig::default(),
         ))),
         #[cfg(not(feature = "runtime-wasm"))]
-        "wasm" => anyhow::bail!(
+        zeroclaw_config::schema::RuntimeKind::Wasm => anyhow::bail!(
             "runtime.kind='wasm' requires the `runtime-wasm` feature. Rebuild with: cargo build --features runtime-wasm"
         ),
-        "cloudflare" => anyhow::bail!(
+        zeroclaw_config::schema::RuntimeKind::Cloudflare => anyhow::bail!(
             "runtime.kind='cloudflare' is not implemented yet. Use runtime.kind='native' for now."
         ),
-        other if other.trim().is_empty() => {
-            anyhow::bail!("runtime.kind cannot be empty. Supported values: native, docker")
-        }
-        other => anyhow::bail!("Unknown runtime kind '{other}'. Supported values: native, docker"),
     }
 }
 
@@ -44,7 +40,7 @@ mod tests {
     #[test]
     fn factory_native() {
         let cfg = RuntimeConfig {
-            kind: "native".into(),
+            kind: zeroclaw_config::schema::RuntimeKind::Native,
             ..RuntimeConfig::default()
         };
         let rt = create_runtime(&cfg).unwrap();
@@ -55,7 +51,7 @@ mod tests {
     #[test]
     fn factory_docker() {
         let cfg = RuntimeConfig {
-            kind: "docker".into(),
+            kind: zeroclaw_config::schema::RuntimeKind::Docker,
             ..RuntimeConfig::default()
         };
         let rt = create_runtime(&cfg).unwrap();
@@ -66,7 +62,7 @@ mod tests {
     #[test]
     fn factory_cloudflare_errors() {
         let cfg = RuntimeConfig {
-            kind: "cloudflare".into(),
+            kind: zeroclaw_config::schema::RuntimeKind::Cloudflare,
             ..RuntimeConfig::default()
         };
         match create_runtime(&cfg) {
@@ -76,33 +72,9 @@ mod tests {
     }
 
     #[test]
-    fn factory_unknown_errors() {
-        let cfg = RuntimeConfig {
-            kind: "wasm-edge-unknown".into(),
-            ..RuntimeConfig::default()
-        };
-        match create_runtime(&cfg) {
-            Err(err) => assert!(err.to_string().contains("Unknown runtime kind")),
-            Ok(_) => panic!("unknown runtime should error"),
-        }
-    }
-
-    #[test]
-    fn factory_empty_errors() {
-        let cfg = RuntimeConfig {
-            kind: String::new(),
-            ..RuntimeConfig::default()
-        };
-        match create_runtime(&cfg) {
-            Err(err) => assert!(err.to_string().contains("cannot be empty")),
-            Ok(_) => panic!("empty runtime should error"),
-        }
-    }
-
-    #[test]
     fn factory_created_runtime_is_correct_type() {
         let cfg = RuntimeConfig {
-            kind: "native".into(),
+            kind: zeroclaw_config::schema::RuntimeKind::Native,
             ..RuntimeConfig::default()
         };
         let rt = create_runtime(&cfg).unwrap();
@@ -115,7 +87,7 @@ mod tests {
     #[test]
     fn factory_docker_created_from_config() {
         let cfg = RuntimeConfig {
-            kind: "docker".into(),
+            kind: zeroclaw_config::schema::RuntimeKind::Docker,
             ..RuntimeConfig::default()
         };
         let rt = create_runtime(&cfg).unwrap();
@@ -123,37 +95,13 @@ mod tests {
     }
 
     #[test]
-    fn factory_whitespace_kind_errors() {
-        let cfg = RuntimeConfig {
-            kind: "   ".into(),
-            ..RuntimeConfig::default()
-        };
-        match create_runtime(&cfg) {
-            Err(err) => assert!(err.to_string().contains("cannot be empty")),
-            Ok(_) => panic!("whitespace-only runtime should error"),
-        }
-    }
-
-    #[test]
-    fn factory_case_sensitive() {
-        let cfg = RuntimeConfig {
-            kind: "NATIVE".into(),
-            ..RuntimeConfig::default()
-        };
-        match create_runtime(&cfg) {
-            Err(err) => assert!(err.to_string().contains("Unknown runtime kind")),
-            Ok(_) => panic!("case-sensitive matching should fail"),
-        }
-    }
-
-    #[test]
     fn factory_adapters_impl_runtime_trait() {
         let native_cfg = RuntimeConfig {
-            kind: "native".into(),
+            kind: zeroclaw_config::schema::RuntimeKind::Native,
             ..RuntimeConfig::default()
         };
         let docker_cfg = RuntimeConfig {
-            kind: "docker".into(),
+            kind: zeroclaw_config::schema::RuntimeKind::Docker,
             ..RuntimeConfig::default()
         };
 
@@ -170,7 +118,7 @@ mod tests {
     #[test]
     fn factory_returns_boxed_trait_object() {
         let cfg = RuntimeConfig {
-            kind: "native".into(),
+            kind: zeroclaw_config::schema::RuntimeKind::Native,
             ..RuntimeConfig::default()
         };
         let rt: Box<dyn crate::runtime::RuntimeAdapter> = create_runtime(&cfg).unwrap();
@@ -180,7 +128,7 @@ mod tests {
     #[test]
     fn factory_cloudflare_message_clear() {
         let cfg = RuntimeConfig {
-            kind: "cloudflare".into(),
+            kind: zeroclaw_config::schema::RuntimeKind::Cloudflare,
             ..RuntimeConfig::default()
         };
         match create_runtime(&cfg) {
